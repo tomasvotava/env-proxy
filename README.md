@@ -41,3 +41,7 @@ class MyProxy(EnvProxy):
 database_host = EnvProxy.get_str("database-host")
 ### Searches for MYAPP_DATABASE_HOST variable
 ```
+
+## Documentation
+
+See [docs](https://tomasvotava.github.io/env-proxy/)
