@@ -1,6 +1,6 @@
 # EnvProxy
 
-`EnvProxy` providers a class used to query environmental variables with typehinting a conversion to basic Python types.
+`EnvProxy` provides a class used to query environmental variables with typehinting a conversion to basic Python types.
 You can query your environment easily and keep your typehinting.
 
 ## Installation
