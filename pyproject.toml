@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "env-proxy"
-version = "0.1.2"
+version = "0.1.3"
 description = "Creates a class used to query environmental variables with typehinting a conversion to basic Python types."
 authors = ["Tomas Votava <info@tomasvotava.eu>"]
 license = "MIT"
