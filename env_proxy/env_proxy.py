@@ -1,5 +1,7 @@
 """EnvProxy creates a proxy to environmental variables with typehinting and type conversion."""
 
+from __future__ import annotations
+
 import json
 import logging
 import os

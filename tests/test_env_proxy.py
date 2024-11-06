@@ -1,12 +1,17 @@
 """Tests for the env_proxy module."""
 
 import os
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
-from types import NoneType
 from typing import Any
 
 import pytest
+
+if sys.version_info >= (3, 10):
+    from types import NoneType
+else:
+    NoneType = type(None)
 
 from env_proxy import EnvProxy
 
