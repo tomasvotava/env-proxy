@@ -1,12 +1,14 @@
-"""EnvProxy creates a proxy to environmental variables with typehinting and type conversion.
-"""
+"""EnvProxy creates a proxy to environmental variables with typehinting and type conversion."""
 
 import os
 from typing import Any, Optional
 
+bool_truthy = ("yes", "true", "1", "on", "enable", "enabled", "allow")
+bool_falsy = ("no", "false", "0", "off", "disable", "disabled", "deny")
+
 
 class EnvProxy:
-    """A proxy to environmental variables with typehinting and type conversion"""
+    """A proxy to environmental variables with typehinting and type conversion."""
 
     env_prefix: Optional[str] = None
 
@@ -21,6 +23,27 @@ class EnvProxy:
         """Get any value"""
         key_cleaned = cls._get_key(key)
         val = os.getenv(key_cleaned, None)
+        return val
+
+    @classmethod
+    def get_bool(cls, key: str) -> bool | None:
+        key_cleaned = cls._get_key(key)
+        val = os.getenv(key_cleaned, None)
+        if val is None:
+            return None
+        if val.lower() in bool_truthy:
+            return True
+        if val.lower() in bool_falsy:
+            return False
+        raise ValueError(
+            f"Key {key} is present in the environment, but its value {val!r} is neither truthy, nor falsy."
+        )
+
+    @classmethod
+    def get_bool_strict(cls, key: str) -> bool:
+        val = cls.get_bool(key)
+        if val is None:
+            raise ValueError(f"No valid boolean value for key {key} in environment.")
         return val
 
     @classmethod
