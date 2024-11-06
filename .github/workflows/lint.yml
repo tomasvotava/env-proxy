@@ -1,0 +1,38 @@
+name: Lint & test
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+env:
+  POETRY_VIRTUALENVS_CREATE: "false"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version:
+          - "3.9"
+          - "3.10"
+          - "3.11"
+          - "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup python ${{matrix.python-version}}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{matrix.python-version}}
+      - name: Install poetry
+        run: curl -sSL https://install.python-poetry.org | python -
+      - name: Install dependencies
+        run: ~/.local/bin/poetry install
+      - name: ruff
+        run: ~/.local/bin/poetry run ruff check env_proxy tests
+      - name: mypy
+        run: ~/.local/bin/poetry run mypy env_proxy tests
+      - name: pytest
+        run: ~/.local/bin/poetry run pytest -vv tests/
