@@ -1,12 +1,14 @@
 """EnvProxy creates a proxy to environmental variables with typehinting and type conversion."""
 
-from __future__ import annotations
-
 import json
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import lru_cache
 from typing import Any, TypeVar, overload
+
+from ._sentinel import UNSET, Sentinel
 
 T = TypeVar("T")
 
@@ -16,10 +18,33 @@ bool_truthy = ("yes", "true", "1", "on", "enable", "enabled", "allow")
 bool_falsy = ("no", "false", "0", "off", "disable", "disabled", "deny", "disallow")
 
 
-class Sentinel: ...
+@contextmanager
+def apply_env(**env: str) -> Iterator[None]:
+    """
+    A context manager that temporarily sets the specified environment
+    variables to the given values. When the context is exited, the original environment
+    variables are restored.
+    Args:
+        **env: Arbitrary keyword arguments where the key is the environment variable name
+               and the value is the environment variable value to set.
+    Example:
+        with apply_env(MY_VAR='value'):
+            # MY_VAR is set to 'value' within this block
+            ...
+        # MY_VAR is restored to its original value after the block
+    """
 
-
-UNSET = Sentinel()
+    original_env: dict[str, str] = {}
+    for key, value in env.items():
+        if (original_value := os.getenv(key)) is not None:
+            original_env[key] = original_value
+        os.environ[key] = value
+    yield
+    for key in env:
+        if key in original_env:
+            os.environ[key] = original_env[key]
+        else:
+            del os.environ[key]
 
 
 @lru_cache(maxsize=100)
@@ -50,6 +75,8 @@ class EnvProxy:
         key = self._get_key(key)
         logger.debug(f"Attempting to read {key!r} from env.")
         value = os.getenv(key, None)
+        if not value:
+            value = None
         if value is None:
             logger.debug(f"No value for key {key!r} in env.")
         return value
@@ -118,7 +145,7 @@ class EnvProxy:
             return self._resolve_default(key, default)
         if isinstance(value, str):
             return value
-        return str(value)
+        return str(value)  # pragma: no cover, unreachable
 
     @overload
     def get_int(self, key: str, default: T) -> int | T: ...

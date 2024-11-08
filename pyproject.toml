@@ -12,16 +12,27 @@ repository = "https://github.com/tomasvotava/env-proxy"
 pytest = "^8.3.3"
 mypy = "^1.13.0"
 ruff = "^0.7.2"
+pytest-cov = "^6.0.0"
 
 [tool.poetry.dependencies]
-python = "^3.9,<3.14"
+python = ">=3.10,<3.14"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
+[tool.pytest.ini_options]
+testpaths = ["tests/"]
+addopts = [
+    "-v",
+    "--cov=env_proxy",
+    "--cov-report=xml:coverage.xml",
+    "--cov-report=json:coverage.json",
+    "--cov-report=term-missing",
+]
+
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 120
 
 [tool.ruff.lint]
