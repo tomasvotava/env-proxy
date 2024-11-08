@@ -1,40 +1,39 @@
 """Tests for the env_proxy module."""
 
 import os
-import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
+from types import NoneType
 from typing import Any
 
 import pytest
 
-if sys.version_info >= (3, 10):
-    from types import NoneType
-else:
-    NoneType = type(None)
-
 from env_proxy import EnvProxy
+from env_proxy.env_proxy import apply_env
 
 
-@contextmanager
-def apply_env(**env: str) -> Iterator[None]:
-    original_env: dict[str, str] = {}
-    for key, value in env.items():
-        if (original_value := os.getenv(key)) is not None:
-            original_env[key] = original_value
-        os.environ[key] = value
-    yield
-    for key in env:
-        if key in original_env:
-            os.environ[key] = original_env[key]
-        else:
-            del os.environ[key]
+def test_apply_env() -> None:
+    os.environ["TEST_VAR_PREEXISTING"] = "this was always here"
+    assert os.getenv("TEST_VAR_DOES_NOT_EXIST") is None
+    assert os.getenv("TEST_VAR_PREEXISTING") == "this was always here"
+    with apply_env(TEST_VAR_DOES_NOT_EXIST="it does", TEST_VAR_PREEXISTING="now it's different"):
+        assert os.getenv("TEST_VAR_DOES_NOT_EXIST") == "it does"
+        assert os.getenv("TEST_VAR_PREEXISTING") == "now it's different"
+    assert os.getenv("TEST_VAR_DOES_NOT_EXIST") is None
+    assert os.getenv("TEST_VAR_PREEXISTING") == "this was always here"
 
 
 def test_get_with_prefix() -> None:
     with apply_env(SUPERPREFIX_VARIABLE="value", VARIABLE="another-value"):
         proxy = EnvProxy(prefix="superprefix")
         assert proxy.get_any("variable") == "value"
+
+
+def test_empty_is_as_good_as_none() -> None:
+    with apply_env(PREFIX_EMPTY=""):
+        proxy = EnvProxy(prefix="PREFIX")
+        assert proxy.get_any("empty", None) is None
+        assert proxy.get_any("empty", 4) == 4
+        with pytest.raises(ValueError, match="No value found for key 'empty' in the environment."):
+            assert proxy.get_any("empty")
 
 
 def test_get_without_prefix() -> None:
