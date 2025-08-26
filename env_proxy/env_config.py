@@ -320,7 +320,11 @@ class EnvField:
             raise TypeError(f"Field {self.field_name!r} of {instance.__class__.__name__!r} is read-only.")
         key = self.env_proxy._get_key(self.key_name)
         logger.debug(f"Setting {key!r} in os.environ.")
-        os.environ[key] = str(value)
+        if value is None:
+            if key in os.environ:
+                del os.environ[key]
+        else:
+            os.environ[key] = str(value)
 
     def __get__(self, instance: EnvConfig, instance_type: type[EnvConfig]) -> Any:
         return self.value_getter(self.key_name, self.default)
