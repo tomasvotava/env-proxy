@@ -44,7 +44,8 @@ def apply_env(**env: str) -> Iterator[None]:
         if key in original_env:
             os.environ[key] = original_env[key]
         else:
-            del os.environ[key]
+            if key in os.environ:
+                del os.environ[key]
 
 
 @lru_cache(maxsize=100)

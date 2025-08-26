@@ -164,6 +164,10 @@ class UndocumentedConfig(EnvConfig):
     failure: Any = Field(type_hint="json", default={"this is not json-encodable"})
 
 
+class AllowSetToNone(EnvConfig):
+    can_be_set: str | None = Field(allow_set=True, default=None)
+
+
 def test_basic_config() -> None:
     test_env = {
         "INTEGER": "4",
@@ -401,3 +405,11 @@ def test_invalid_json_default_docs_export() -> None:
         ValueError, match="Failed to export default for field 'failure'. Its default value cannot be encoded as a JSON."
     ):
         UndocumentedConfig.export_env(file, include_defaults=True)
+
+
+def test_can_set_to_none() -> None:
+    with apply_env(CAN_BE_SET="some str"):
+        config = AllowSetToNone()
+        assert config.can_be_set == "some str"
+        config.can_be_set = None
+        assert config.can_be_set is None
