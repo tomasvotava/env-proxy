@@ -183,16 +183,16 @@ def test_basic_config() -> None:
         assert config.field_with_alias == 3.14
         assert config.has_prefix == "string"
         assert config.has_prefix_and_alias == "different string"
-        with pytest.raises(ValueError, match="No value found for key 'no_default' in the environment."):
+        with pytest.raises(ValueError, match=r"No value found for key 'no_default' in the environment."):
             _ = config.no_default
         assert config.has_default is None
         assert config.has_implicit_default is None
         assert config.has_typehint == {"field": "value"}
-        with pytest.raises(ValueError, match="No value found for key 'supports_set' in the environment."):
+        with pytest.raises(ValueError, match=r"No value found for key 'supports_set' in the environment."):
             _ = config.supports_set
         config.supports_set = "now it exists"
         assert config.supports_set == "now it exists"
-        with pytest.raises(TypeError, match="Field 'integer' of 'BasicConfig' is read-only."):
+        with pytest.raises(TypeError, match=r"Field 'integer' of 'BasicConfig' is read-only."):
             config.integer = 3
         assert config.array == ["apple", "banana", "kiwi", "peach", "ananas"]
 
@@ -241,7 +241,7 @@ def test_config_inherited() -> None:
         assert overridden_allow_set.allow_set is False
         assert overridden_allow_set.env_proxy is InheritConfig.env_proxy
 
-        with pytest.raises(ValueError, match="No value found for key 'missing' in the environment."):
+        with pytest.raises(ValueError, match=r"No value found for key 'missing' in the environment."):
             _ = config.missing
 
         config.missing = "not missing anymore"
@@ -282,7 +282,7 @@ def test_difficult_config() -> None:
         config = DifficultConfig()
         with pytest.raises(
             RuntimeError,
-            match="Failed to determine value getter for field 'complex_stuff'. "
+            match=r"Failed to determine value getter for field 'complex_stuff'. "
             "No type hint was provided and the annotation is too complicated.",
         ):
             _ = config.complex_stuff
@@ -293,7 +293,7 @@ def test_difficult_config() -> None:
         assert no_annotation_field.annotated_optional is False
         with pytest.raises(
             ValueError,
-            match="No type annotation nor type hint found for field 'no_annotation'. "
+            match=r"No type annotation nor type hint found for field 'no_annotation'. "
             "Set strict=False to turn this exception into a warning instead.",
         ):
             _ = config.no_annotation
@@ -333,21 +333,21 @@ def test_get_type_hint_handler(type_hint: TypeHint, expected: str) -> None:
 
 def test_use_field_outside_instance() -> None:
     wrong_field = Field()
-    with pytest.raises(RuntimeError, match="Field was not properly initialized and has no name."):
+    with pytest.raises(RuntimeError, match=r"Field was not properly initialized and has no name."):
         _ = wrong_field.field_name
 
-    with pytest.raises(RuntimeError, match="Field was not properly initialized and has no owner."):
+    with pytest.raises(RuntimeError, match=r"Field was not properly initialized and has no owner."):
         _ = wrong_field.owner
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="A different exception is raised on versions before 3.12.")
 def test_field_with_reserved_name() -> None:
-    with pytest.raises(ValueError, match="Field name '_field' is reserved for internal use."):
+    with pytest.raises(ValueError, match=r"Field name '_field' is reserved for internal use."):
 
         class _WrongField:
             _field = Field()
 
-    with pytest.raises(ValueError, match="Field name 'env_proxy' is reserved for internal use."):
+    with pytest.raises(ValueError, match=r"Field name 'env_proxy' is reserved for internal use."):
 
         class _WrongFieldProxy:
             env_proxy = Field()
@@ -356,14 +356,14 @@ def test_field_with_reserved_name() -> None:
 @pytest.mark.skipif(sys.version_info >= (3, 12), reason="A different exception is raised on versions from 3.12 on.")
 def test_field_with_reserved_name_runtime() -> None:
     with pytest.raises(
-        RuntimeError, match="Error calling __set_name__ on 'EnvField' instance '_field' in '_WrongField'"
+        RuntimeError, match=r"Error calling __set_name__ on 'EnvField' instance '_field' in '_WrongField'"
     ):
 
         class _WrongField:
             _field = Field()
 
     with pytest.raises(
-        RuntimeError, match="Error calling __set_name__ on 'EnvField' instance 'env_proxy' in '_WrongFieldProxy'"
+        RuntimeError, match=r"Error calling __set_name__ on 'EnvField' instance 'env_proxy' in '_WrongFieldProxy'"
     ):
 
         class _WrongFieldProxy:
@@ -402,7 +402,8 @@ def test_generate_env_file_str_path(tmp_path: Path) -> None:
 def test_invalid_json_default_docs_export() -> None:
     file = StringIO()
     with pytest.raises(
-        ValueError, match="Failed to export default for field 'failure'. Its default value cannot be encoded as a JSON."
+        ValueError,
+        match=r"Failed to export default for field 'failure'. Its default value cannot be encoded as a JSON.",
     ):
         UndocumentedConfig.export_env(file, include_defaults=True)
 

@@ -20,20 +20,21 @@ bool_falsy = ("no", "false", "0", "off", "disable", "disabled", "deny", "disallo
 
 @contextmanager
 def apply_env(**env: str) -> Iterator[None]:
-    """
-    A context manager that temporarily sets the specified environment
+    """A context manager that temporarily sets the specified environment
     variables to the given values. When the context is exited, the original environment
     variables are restored.
+
     Args:
         **env: Arbitrary keyword arguments where the key is the environment variable name
                and the value is the environment variable value to set.
+
     Example:
         with apply_env(MY_VAR='value'):
             # MY_VAR is set to 'value' within this block
             ...
         # MY_VAR is restored to its original value after the block
-    """
 
+    """
     original_env: dict[str, str] = {}
     for key, value in env.items():
         if (original_value := os.getenv(key)) is not None:

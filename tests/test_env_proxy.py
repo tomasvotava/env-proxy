@@ -32,7 +32,7 @@ def test_empty_is_as_good_as_none() -> None:
         proxy = EnvProxy(prefix="PREFIX")
         assert proxy.get_any("empty", None) is None
         assert proxy.get_any("empty", 4) == 4
-        with pytest.raises(ValueError, match="No value found for key 'empty' in the environment."):
+        with pytest.raises(ValueError, match=r"No value found for key 'empty' in the environment."):
             assert proxy.get_any("empty")
 
 
@@ -59,7 +59,7 @@ def test_get_any() -> None:
         proxy = EnvProxy()
         assert proxy.get_any("my-variable") == "my-value"
         assert proxy.get_any("does-not-exist", None) is None
-        with pytest.raises(ValueError, match="No value found for key 'does-not-exist' in the environment."):
+        with pytest.raises(ValueError, match=r"No value found for key 'does-not-exist' in the environment."):
             proxy.get_any("does-not-exist")
 
 
@@ -93,10 +93,10 @@ def test_get_bool_from_words(value: str, result: bool) -> None:
 def test_get_bool_bad_words(value: str) -> None:
     with apply_env(MY_VARIABLE=value):
         proxy = EnvProxy()
-        with pytest.raises(ValueError, match="Key 'my-variable' is present in the environment, but its value.*"):
+        with pytest.raises(ValueError, match=r"Key 'my-variable' is present in the environment, but its value.*"):
             proxy.get_bool("my-variable")
 
-        with pytest.raises(ValueError, match="Key 'my-variable' is present in the environment, but its value.*"):
+        with pytest.raises(ValueError, match=r"Key 'my-variable' is present in the environment, but its value.*"):
             proxy.get_bool("my-variable", None)
 
 
@@ -127,7 +127,7 @@ def test_get_typed(expected_type: type[Any], method_name: str, test_value: str, 
         assert value == expected_value
         assert isinstance(value, expected_type)
         assert getattr(proxy, method_name)("does-not-exist", None) is None
-        with pytest.raises(ValueError, match="No value found for key 'does-not-exist' in the environment."):
+        with pytest.raises(ValueError, match=r"No value found for key 'does-not-exist' in the environment."):
             getattr(proxy, method_name)("does-not-exist")
 
 

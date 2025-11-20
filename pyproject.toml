@@ -9,13 +9,13 @@ homepage = "https://github.com/tomasvotava/env-proxy"
 repository = "https://github.com/tomasvotava/env-proxy"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.3.3"
-mypy = "^1.13.0"
-ruff = "^0.7.3"
+pytest = "^9"
+mypy = "<2"
+ruff = "<1"
 pytest-cov = "^6.0.0"
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.14"
+python = ">=3.10,<3.15"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -38,7 +38,6 @@ line-length = 120
 [tool.ruff.lint]
 select = [
     "E",
-    "W",
     "F",
     "B",
     "I",
@@ -46,19 +45,13 @@ select = [
     "UP",
     "S",
     "A",
-    "Q",
     "DTZ",
     "PT",
     "SIM",
     "PTH",
+    "PD",
     "RUF",
     "T20",
-    "ASYNC",
-    "C4",
-    "DJ",
-    "ISC",
-    "TCH",
-    "TD",
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -247,15 +247,16 @@ class EnvField:
 
     @cached_property
     def value_getter(self) -> Callable[[str, Any], Any]:
-        """
-        Determines and returns the appropriate value getter method based on type hints or annotations.
+        """Determines and returns the appropriate value getter method based on type hints or annotations.
+
         Returns:
             Callable[[str, Any], Any]: A function that retrieves the value from the environment proxy.
+
         Raises:
             ValueError: If no type annotation or type hint is found and strict mode is enabled.
             RuntimeError: If the annotation is too complicated and strict mode is enabled.
-        """
 
+        """
         if self.type_hint is not None:
             return _get_type_hint_handler(self.type_hint, self.env_proxy)
         if self._annotation is None:
