@@ -1,4 +1,19 @@
 from env_proxy.env_config import EnvConfig, EnvField, Field
 from env_proxy.env_proxy import EnvProxy
+from env_proxy.exceptions import (
+    EnvKeyMissingError,
+    EnvProxyError,
+    EnvValidationError,
+    EnvValueError,
+)
 
-__all__ = ["EnvConfig", "EnvField", "EnvProxy", "Field"]
+__all__ = [
+    "EnvConfig",
+    "EnvField",
+    "EnvKeyMissingError",
+    "EnvProxy",
+    "EnvProxyError",
+    "EnvValidationError",
+    "EnvValueError",
+    "Field",
+]

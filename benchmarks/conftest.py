@@ -1,5 +1,6 @@
 """Shared fixtures for the benchmark suite."""
 
+import warnings
 from collections.abc import Iterator
 
 import pytest
@@ -67,4 +68,15 @@ def bench_config_no_overrides(bench_config_cls: type[EnvConfig]) -> EnvConfig:
 def bench_config_with_overrides(bench_config_cls: type[EnvConfig], full_overrides: dict[str, object]) -> EnvConfig:
     cfg = bench_config_cls(**full_overrides)
     _ = cfg.str_field  # type: ignore[attr-defined]
+    return cfg
+
+
+@pytest.fixture(scope="module")
+def bench_config_frozen(bench_config_cls: type[EnvConfig]) -> EnvConfig:
+    cfg = bench_config_cls()
+    # Warm cached_property attrs so freeze() pays them once outside the bench.
+    _ = cfg.str_field  # type: ignore[attr-defined]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cfg.freeze()
     return cfg

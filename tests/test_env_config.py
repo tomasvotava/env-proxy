@@ -1,13 +1,21 @@
 """Test EnvConfig configurations."""
 
+import enum
 import json
 import logging
 import os
 import sys
+import warnings
+from decimal import Decimal
 from functools import partial
 from io import StringIO
 from pathlib import Path
 from typing import Any, cast
+
+if sys.version_info >= (3, 11):
+    from typing import Never
+else:  # pragma: no cover
+    from typing_extensions import Never
 
 import pytest
 
@@ -546,3 +554,392 @@ def test_override_set_to_none() -> None:
         config.can_be_set = None
         assert config.can_be_set is None
         assert "CAN_BE_SET" not in os.environ
+
+
+class FreezeConfig(EnvConfig):
+    env_proxy = EnvProxy(prefix="FREEZE")
+    name: str = Field()
+    port: int = Field()
+    debug: bool = Field(default=False)
+    mutable: str = Field(allow_set=True, default="initial")
+
+
+class FreezeChildConfig(FreezeConfig):
+    extra: str = Field(default="x")
+
+
+def test_freeze_captures_env_at_call_time() -> None:
+    with apply_env(FREEZE_NAME="svc", FREEZE_PORT="8080"):
+        config = FreezeConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    # Env vars are gone — frozen values should still be served.
+    assert config.name == "svc"
+    assert config.port == 8080
+    assert config.debug is False
+
+
+def test_freeze_does_not_reread_env_after_call() -> None:
+    with apply_env(FREEZE_NAME="first", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+        with apply_env(FREEZE_NAME="second", FREEZE_PORT="2"):
+            assert config.name == "first"
+            assert config.port == 1
+
+
+def test_freeze_respects_overrides() -> None:
+    with apply_env(FREEZE_NAME="from-env", FREEZE_PORT="1"):
+        config = FreezeConfig(name="from-override")
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    assert config.name == "from-override"
+    assert config.port == 1
+
+
+def test_freeze_blocks_set_even_for_allow_set_fields() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True.*\['mutable'\]"):
+            config.freeze()
+    with pytest.raises(TypeError, match=r"frozen"):
+        config.mutable = "after"
+    # Read still works.
+    assert config.mutable == "initial"
+
+
+def test_freeze_blocks_set_for_readonly_fields_too() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    with pytest.raises(TypeError, match=r"frozen"):
+        config.name = "other"
+
+
+def test_freeze_emits_no_warning_when_no_allow_set_fields() -> None:
+    class NoMutable(EnvConfig):
+        env_proxy = EnvProxy(prefix="NOMUT")
+        a: str = Field(default="x")
+
+    config = NoMutable()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        config.freeze()
+    assert config.a == "x"
+
+
+def test_double_freeze_is_noop_with_warning() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    snapshot = config._frozen
+    with pytest.warns(UserWarning, match=r"already frozen"):
+        config.freeze()
+    assert config._frozen is snapshot
+
+
+def test_freeze_includes_inherited_fields() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeChildConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    assert config.name == "n"
+    assert config.port == 1
+    assert config.extra == "x"
+
+
+def test_validate_passes_when_env_is_complete() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        FreezeConfig().validate()  # no raise
+
+
+def test_validate_aggregates_missing_and_malformed() -> None:
+    with (
+        apply_env(FREEZE_PORT="not-an-int"),
+        pytest.raises(ValueError, match=r"FreezeConfig failed validation") as excinfo,
+    ):
+        FreezeConfig().validate()
+    msg = str(excinfo.value)
+    assert "name:" in msg  # missing
+    assert "port:" in msg  # malformed
+
+
+def test_validate_skips_overrides() -> None:
+    # name has no env, but supplied via override — should not raise.
+    with apply_env(FREEZE_PORT="1"):
+        FreezeConfig(name="provided").validate()
+
+
+def test_validate_does_not_freeze() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        config.validate()
+        assert config._frozen is None
+        # Still mutable through allow_set path.
+        config.mutable = "changed"
+        assert config.mutable == "changed"
+
+
+def test_validate_then_freeze_works() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        config.validate()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    assert config.name == "n"
+
+
+def test_is_frozen_starts_false() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+    assert config.is_frozen is False
+
+
+def test_is_frozen_true_after_freeze() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    assert config.is_frozen is True
+
+
+def test_is_frozen_unchanged_by_validate() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        config.validate()
+        assert config.is_frozen is False
+
+
+def test_validate_raises_envvalidationerror() -> None:
+    from env_proxy import EnvKeyMissingError, EnvValidationError
+
+    with apply_env(FREEZE_PORT="not-an-int"), pytest.raises(EnvValidationError) as excinfo:
+        FreezeConfig().validate()
+    err = excinfo.value
+    # Still a ValueError for back-compat.
+    assert isinstance(err, ValueError)
+    # Structured access to individual failures.
+    assert set(err.errors) == {"name", "port"}
+    assert isinstance(err.errors["name"], EnvKeyMissingError)
+    assert err.errors["name"].key == "name"
+
+
+def test_validate_propagates_non_envproxy_exceptions() -> None:
+    """A converter raising a non-env-proxy exception should bubble out untouched."""
+
+    def _broken_converter(value: str) -> int:
+        raise RuntimeError("converter is buggy")
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="BRK")
+        v: int = Field(convert_using=_broken_converter)
+
+    # The plain RuntimeError gets wrapped by EnvValueError (which is an
+    # EnvProxyError), so validate aggregates it — that's the expected path.
+    from env_proxy import EnvValidationError, EnvValueError
+
+    with apply_env(BRK_V="x"), pytest.raises(EnvValidationError) as excinfo:
+        Cfg().validate()
+    inner = excinfo.value.errors["v"]
+    assert isinstance(inner, EnvValueError)
+    assert isinstance(inner.__cause__, RuntimeError)
+
+
+def test_validate_does_not_swallow_unexpected_in_field_resolution() -> None:
+    """Errors that are not EnvProxyError (e.g. from a broken value_getter
+    cached_property) bubble out so they can be debugged."""
+    from env_proxy import EnvKeyMissingError
+
+    class WeirdEnvField(EnvField):
+        @property
+        def value_getter(self) -> Never:
+            raise AttributeError("simulated bug")
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="WEIRD")
+        # Bypass Field() factory to inject the weird descriptor.
+        v: int = WeirdEnvField()  # type: ignore[assignment]
+
+    with pytest.raises(AttributeError, match=r"simulated bug"):
+        Cfg().validate()
+    # Sanity: EnvKeyMissingError would have been caught had it been raised.
+    assert EnvKeyMissingError is not AttributeError  # type: ignore[comparison-overlap]
+
+
+def test_missing_required_raises_env_key_missing_error() -> None:
+    from env_proxy import EnvKeyMissingError
+
+    proxy = EnvProxy()
+    with pytest.raises(EnvKeyMissingError) as excinfo:
+        proxy.get_int("nope")
+    assert excinfo.value.key == "nope"
+    # Still catches as ValueError.
+    assert isinstance(excinfo.value, ValueError)
+
+
+class _Level(enum.Enum):
+    LOW = "low"
+    HIGH = "high"
+
+
+class ConvertingConfig(EnvConfig):
+    env_proxy = EnvProxy(prefix="CVT")
+    level: _Level = Field(convert_using=_Level)
+    amount: Decimal = Field(convert_using=Decimal, default=Decimal("0"))
+    level_optional: _Level = Field(convert_using=_Level, default=_Level.LOW)
+
+
+def test_convert_using_enum() -> None:
+    with apply_env(CVT_LEVEL="high"):
+        config = ConvertingConfig()
+        assert config.level is _Level.HIGH
+
+
+def test_convert_using_callable_returns_typed_value() -> None:
+    with apply_env(CVT_LEVEL="low", CVT_AMOUNT="3.14"):
+        config = ConvertingConfig()
+        assert config.amount == Decimal("3.14")
+
+
+def test_convert_using_propagates_converter_errors() -> None:
+    from env_proxy import EnvValueError
+
+    with apply_env(CVT_LEVEL="nope"):
+        config = ConvertingConfig()
+        with pytest.raises(EnvValueError, match=r"is not a valid _Level") as excinfo:
+            _ = config.level
+    # Original converter exception preserved on __cause__.
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert "nope" in str(excinfo.value.__cause__)
+    assert excinfo.value.key == "level"
+    assert excinfo.value.value == "nope"
+    assert excinfo.value.target == "_Level"
+
+
+def test_convert_using_skips_converter_when_default_used() -> None:
+    sentinel_calls: list[str] = []
+
+    def _spy(value: str) -> _Level:
+        sentinel_calls.append(value)
+        return _Level(value)
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="SPY")
+        level: _Level = Field(convert_using=_spy, default=_Level.LOW)
+
+    # Env unset → default served as-is, converter not called.
+    config = Cfg()
+    assert config.level is _Level.LOW
+    assert sentinel_calls == []
+
+
+def test_convert_using_without_default_raises_when_env_missing() -> None:
+    config = ConvertingConfig()
+    with pytest.raises(ValueError, match=r"No value found for key 'level'"):
+        _ = config.level
+
+
+def test_convert_using_with_type_hint_warns_and_wins() -> None:
+    with pytest.warns(UserWarning, match=r"convert_using overrides type_hint='int'"):
+
+        class Cfg(EnvConfig):
+            env_proxy = EnvProxy(prefix="WARN")
+            level: _Level = Field(convert_using=_Level, type_hint="int")
+
+    with apply_env(WARN_LEVEL="high"):
+        config = Cfg()
+        assert config.level is _Level.HIGH
+
+
+def test_convert_using_export_emits_callable_name() -> None:
+    buf = StringIO()
+    ConvertingConfig.export_env(buf, include_defaults=False)
+    content = buf.getvalue()
+    assert "(_Level)" in content
+    assert "(Decimal)" in content
+
+
+def test_convert_using_export_uses_annotation_over_callable_name() -> None:
+    """Annotation wins for the type label, so a lambda + `int` annotation reads as `int`."""
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="LAM")
+        v: int = Field(convert_using=lambda s: int(s) * 2)
+
+    buf = StringIO()
+    Cfg.export_env(buf, include_defaults=False)
+    assert "(int)" in buf.getvalue()
+
+
+def test_convert_using_export_lambda_without_annotation_falls_back_to_custom() -> None:
+    """No annotation and a lambda (name == '<lambda>') → label is 'custom'."""
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="LAMNO")
+        v = Field(convert_using=lambda s: int(s) * 2, strict=False)
+
+    buf = StringIO()
+    Cfg.export_env(buf, include_defaults=False)
+    assert "(custom)" in buf.getvalue()
+
+
+def test_convert_using_export_callable_instance_falls_back_to_custom() -> None:
+    """Instances of __call__ classes have no __name__ → 'custom'."""
+
+    class CB:
+        def __call__(self, value: str) -> int:
+            return int(value)
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="CB")
+        v = Field(convert_using=CB(), strict=False)
+
+    buf = StringIO()
+    Cfg.export_env(buf, include_defaults=False)
+    assert "(custom)" in buf.getvalue()
+
+
+def test_type_name_overrides_label() -> None:
+    """Explicit type_name= wins over annotation, convert_using.__name__, and fallback."""
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="TN")
+        v: int = Field(convert_using=lambda s: int(s), type_name="Doubled")
+
+    buf = StringIO()
+    Cfg.export_env(buf, include_defaults=False)
+    assert "(Doubled)" in buf.getvalue()
+
+
+def test_type_name_drives_envvalueerror_target() -> None:
+    """The same resolved_type_name is used in EnvValueError messages."""
+    from env_proxy import EnvValueError
+
+    def _converter(s: str) -> int:
+        raise ValueError("nope")
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="TNERR")
+        v: int = Field(convert_using=_converter, type_name="Doubled")
+
+    with apply_env(TNERR_V="anything"), pytest.raises(EnvValueError, match=r"not a valid Doubled"):
+        _ = Cfg().v
+
+
+def test_convert_using_freeze_caches_converted_value() -> None:
+    with apply_env(CVT_LEVEL="high"):
+        config = ConvertingConfig()
+        config.freeze()
+    # Converter not called again on read after freeze; value preserved.
+    assert config.level is _Level.HIGH
+
+
+def test_convert_using_validate_catches_converter_error() -> None:
+    with (
+        apply_env(CVT_LEVEL="bogus"),
+        pytest.raises(ValueError, match=r"ConvertingConfig failed validation"),
+    ):
+        ConvertingConfig().validate()

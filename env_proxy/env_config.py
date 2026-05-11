@@ -8,7 +8,8 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Callable
+import warnings
+from collections.abc import Callable, Iterator
 from functools import cached_property, partial
 from inspect import get_annotations
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Any, ClassVar, Literal, TextIO, TypeVar, get_args, get_origin
 from env_proxy.env_proxy import EnvProxy
 
 from ._sentinel import UNSET
+from .exceptions import EnvProxyError, EnvValidationError, EnvValueError
 
 if sys.version_info >= (3, 11):
     from typing import dataclass_transform
@@ -50,6 +52,18 @@ def _get_type_hint_handler(type_hint: TypeHint, env_proxy: EnvProxy) -> Callable
     if (handler := type_hint_map.get(type_hint)) is not None:
         return partial(handler, env_proxy)
     raise ValueError(f"Unsupported type hint {type_hint!r}.")
+
+
+def _annotation_to_method(env_proxy: EnvProxy) -> dict[Any, Callable[[str, Any], Any]]:
+    """Bind the simplified-annotation → EnvProxy.get_* mapping to a proxy."""
+    return {
+        Any: env_proxy.get_any,
+        bool: env_proxy.get_bool,
+        float: env_proxy.get_float,
+        int: env_proxy.get_int,
+        list: env_proxy.get_list,
+        str: env_proxy.get_str,
+    }
 
 
 reserved_attributes: tuple[str, ...] = ("env_proxy", "env_prefix", "_strict", "_allow_set")
@@ -90,6 +104,8 @@ class EnvField:
         allow_set: bool | None = None,
         type_hint: TypeHint | None = None,
         optional: bool | None = None,
+        convert_using: Callable[[str], Any] | None = None,
+        type_name: str | None = None,
     ) -> None:
         self.alias = alias
         self.description = description
@@ -103,6 +119,14 @@ class EnvField:
         self._allow_set = allow_set
         self.optional = optional
         self.type_hint = type_hint
+        self._convert_using = convert_using
+        self.type_name = type_name
+        if convert_using is not None and type_hint is not None:
+            warnings.warn(
+                f"convert_using overrides type_hint={type_hint!r}; type_hint will be ignored.",
+                UserWarning,
+                stacklevel=3,
+            )
         self._annotation: Any = None
 
     @property
@@ -164,42 +188,84 @@ class EnvField:
         return _get_simplified_annotation(self._annotation)
 
     @cached_property
-    def value_getter(self) -> Callable[[str, Any], Any]:
-        """Determines and returns the appropriate value getter method based on type hints or annotations.
+    def resolved_type_name(self) -> str:
+        """The field's type label — the value shown in exported ``.env`` files.
 
-        Returns:
-            Callable[[str, Any], Any]: A function that retrieves the value from the environment proxy.
+        Resolution order:
 
-        Raises:
-            ValueError: If no type annotation or type hint is found and strict mode is enabled.
-            RuntimeError: If the annotation is too complicated and strict mode is enabled.
-
+        1. Explicit ``type_name=`` argument, if given.
+        2. The field's annotation, when it is a simple type (``int``, ``str``,
+           an enum class, …).
+        3. ``convert_using.__name__``, unless it would be ``"<lambda>"``.
+        4. The ``type_hint=`` value, if given.
+        5. ``"unknown type"`` as a last resort.
         """
+        if self.type_name is not None:
+            return self.type_name
+        sa = self.simplified_annotation
+        if sa is Any:
+            return "any"
+        if isinstance(sa, type):
+            return sa.__name__
+        if self._convert_using is not None:
+            name: str | None = getattr(self._convert_using, "__name__", None)
+            if name and name != "<lambda>":
+                return name
+            return "custom"
+        if self.type_hint is not None:
+            return self.type_hint
+        return "unknown type"
+
+    @cached_property
+    def value_getter(self) -> Callable[[str, Any], Any]:
+        """The callable that fetches and types this field's env value.
+
+        Called internally on every attribute access; usually you don't
+        need to invoke it yourself. ``convert_using`` takes precedence
+        over ``type_hint``, which takes precedence over the annotation.
+        """
+        if self._convert_using is not None:
+            return self._build_convert_using_getter()
         if self.type_hint is not None:
             return _get_type_hint_handler(self.type_hint, self.env_proxy)
         if self._annotation is None:
-            msg = f"No type annotation nor type hint found for field {self.field_name!r}."
-            if self.strict:
-                raise ValueError(f"{msg} {STRING_ERROR_TO_WARNING}")
-            logger.warning(f"{msg} Falling back to 'Any'. {STRING_WARNING_TO_ERROR}")
-            return self.env_proxy.get_any
-        type_to_method_map: dict[Any, Callable[[str, Any], Any]] = {
-            Any: self.env_proxy.get_any,
-            bool: self.env_proxy.get_bool,
-            float: self.env_proxy.get_float,
-            int: self.env_proxy.get_int,
-            list: self.env_proxy.get_list,
-            str: self.env_proxy.get_str,
-        }
+            return self._handle_missing_annotation()
+        return self._handle_annotation()
+
+    def _build_convert_using_getter(self) -> Callable[[str, Any], Any]:
+        proxy = self.env_proxy
+        convert = self._convert_using
+        assert convert is not None  # narrowed by caller  # noqa: S101
+        target = self.resolved_type_name
+
+        def _getter(key: str, default: Any) -> Any:
+            raw = proxy._get_raw(key)
+            if raw is None:
+                return proxy._resolve_default(key, default)
+            try:
+                return convert(raw)
+            except Exception as exc:
+                raise EnvValueError(key, raw, target) from exc
+
+        return _getter
+
+    def _handle_missing_annotation(self) -> Callable[[str, Any], Any]:
+        msg = f"No type annotation nor type hint found for field {self.field_name!r}."
+        if self.strict:
+            raise ValueError(f"{msg} {STRING_ERROR_TO_WARNING}")
+        logger.warning("%s Falling back to 'Any'. %s", msg, STRING_WARNING_TO_ERROR)
+        return self.env_proxy.get_any
+
+    def _handle_annotation(self) -> Callable[[str, Any], Any]:
         if self.simplified_annotation is not None:
-            return type_to_method_map[self.simplified_annotation]
+            return _annotation_to_method(self.env_proxy)[self.simplified_annotation]
         msg = (
             f"Failed to determine value getter for field {self.field_name!r}. "
             "No type hint was provided and the annotation is too complicated."
         )
         if self.strict:
             raise RuntimeError(f"{msg} {STRING_ERROR_TO_WARNING}")
-        logger.warning(f"{msg} {STRING_WARNING_TO_ERROR}")
+        logger.warning("%s %s", msg, STRING_WARNING_TO_ERROR)
         return self.env_proxy.get_any
 
     @property
@@ -212,7 +278,7 @@ class EnvField:
             logger.debug("Using provided EnvProxy instance.")
             return self._env_proxy
         if self._env_prefix is not None:
-            logger.debug(f"Creating EnvProxy instance using provided env_prefix {self._env_prefix!r}.")
+            logger.debug("Creating EnvProxy instance using provided env_prefix %r.", self._env_prefix)
             self._env_proxy = EnvProxy(prefix=self._env_prefix)
             return self._env_proxy
         if (inherited_value := getattr(self.owner, "env_proxy", None)) is not None and isinstance(
@@ -235,13 +301,17 @@ class EnvField:
         self._annotation = get_annotations(owner).get(field_name)
 
     def __set__(self, instance: EnvConfig, value: Any) -> None:
+        if instance.__dict__.get("_frozen") is not None:
+            raise TypeError(
+                f"Cannot set field {self.field_name!r} on {instance.__class__.__name__!r}: instance is frozen."
+            )
         if not self.allow_set:
             raise TypeError(f"Field {self.field_name!r} of {instance.__class__.__name__!r} is read-only.")
         overrides = instance.__dict__.get("_overrides")
         if overrides is not None and self.field_name in overrides:
             overrides[self.field_name] = value
         key = self.env_proxy._get_key(self.key_name)
-        logger.debug(f"Setting {key!r} in os.environ.")
+        logger.debug("Setting %r in os.environ.", key)
         if value is None:
             if key in os.environ:
                 del os.environ[key]
@@ -251,6 +321,9 @@ class EnvField:
     def __get__(self, instance: EnvConfig | None, instance_type: type[EnvConfig]) -> Any:
         if instance is None:
             return self
+        frozen = instance.__dict__.get("_frozen")
+        if frozen is not None:
+            return frozen[self.field_name]
         overrides = instance.__dict__.get("_overrides")
         if overrides is not None and self.field_name in overrides:
             return overrides[self.field_name]
@@ -266,9 +339,22 @@ def Field(  # noqa: N802
     strict: bool | None = None,
     allow_set: bool | None = None,
     type_hint: TypeHint | None = None,
+    convert_using: Callable[[str], Any] | None = None,
+    type_name: str | None = None,
 ) -> Any:
     # A factory function that will help us deal with our descriptor's typehinting issues.
-    return EnvField(alias, description, default, env_proxy, env_prefix, strict, allow_set, type_hint)
+    return EnvField(
+        alias,
+        description,
+        default,
+        env_proxy,
+        env_prefix,
+        strict,
+        allow_set,
+        type_hint,
+        convert_using=convert_using,
+        type_name=type_name,
+    )
 
 
 class FieldDocsBuilder:
@@ -279,13 +365,7 @@ class FieldDocsBuilder:
 
     @staticmethod
     def _get_field_type(field: EnvField) -> str:
-        if field.type_hint is not None:
-            return field.type_hint
-        if field.simplified_annotation is not None:
-            if isinstance(field.simplified_annotation, type):
-                return field.simplified_annotation.__name__
-            return str(field.simplified_annotation).lower()  # pragma: no cover, unreachable
-        return "unknown type"
+        return field.resolved_type_name
 
     @staticmethod
     def _get_field_default(field: EnvField) -> str:
@@ -374,6 +454,86 @@ class EnvConfig:
                 f"Valid field names: {sorted(self._valid_fields)}"
             )
         self._overrides: dict[str, Any] = dict(overrides)
+        self._frozen: dict[str, Any] | None = None
+
+    @property
+    def is_frozen(self) -> bool:
+        """``True`` if :meth:`freeze` has been called on this instance, else ``False``."""
+        return self._frozen is not None
+
+    def _iter_resolved_fields(self) -> Iterator[tuple[str, EnvField, Any]]:
+        """Yield ``(name, field, resolved_value)`` for every Field on this instance.
+
+        Resolution mirrors :meth:`EnvField.__get__`: overrides win over env. Raises
+        whatever ``value_getter`` raises (e.g. :class:`ValueError` for missing
+        required fields). Frozen state is intentionally ignored — this helper is
+        used to *build* a frozen snapshot.
+        """
+        cls = type(self)
+        for name in self._valid_fields:
+            field: EnvField = getattr(cls, name)
+            if name in self._overrides:
+                yield name, field, self._overrides[name]
+            else:
+                yield name, field, field.value_getter(field.key_name, field.default)
+
+    def freeze(self) -> None:
+        """Resolve every field once and lock the instance to the resulting values.
+
+        After calling :meth:`freeze`:
+
+        - Every attribute read returns the cached value (a single dict lookup).
+        - Assignment via ``cfg.field = ...`` raises :class:`TypeError`, even
+          for fields declared with ``allow_set=True``. Any such fields are
+          listed in a :class:`UserWarning` emitted by this call.
+        - :attr:`is_frozen` becomes ``True``.
+
+        Calling :meth:`freeze` again on an already-frozen instance is a no-op
+        and emits a :class:`UserWarning`.
+        """
+        if self._frozen is not None:
+            warnings.warn(
+                f"{type(self).__name__} is already frozen; freeze() is a no-op.",
+                stacklevel=2,
+            )
+            return
+        snapshot: dict[str, Any] = {}
+        mutable: list[str] = []
+        for name, field, value in self._iter_resolved_fields():
+            snapshot[name] = value
+            if field.allow_set:
+                mutable.append(name)
+        if mutable:
+            warnings.warn(
+                f"freeze() locked fields with allow_set=True on {type(self).__name__}: "
+                f"{sorted(mutable)}. Further assignment will raise TypeError.",
+                stacklevel=2,
+            )
+        self._frozen = snapshot
+
+    def validate(self) -> None:
+        """Eagerly resolve every field and raise if anything is missing or malformed.
+
+        Failures from individual fields are collected and re-raised as a single
+        :class:`EnvValidationError` whose :attr:`errors` mapping contains the
+        per-field exceptions. Fields supplied as constructor overrides are
+        already typed Python values, so they are not re-validated.
+
+        Returns ``None`` on success. Does not mutate the instance — call
+        :meth:`freeze` afterwards if you also want to lock in the values.
+        """
+        errors: dict[str, EnvProxyError] = {}
+        cls = type(self)
+        for name in self._valid_fields:
+            if name in self._overrides:
+                continue
+            try:
+                field: EnvField = getattr(cls, name)
+                field.value_getter(field.key_name, field.default)
+            except EnvProxyError as exc:
+                errors[name] = exc
+        if errors:
+            raise EnvValidationError(type(self).__name__, errors)
 
     @classmethod
     def __generate_env_file_content(
@@ -382,7 +542,7 @@ class EnvConfig:
         fields: list[EnvField] = []
         for field_name, field in vars(cls).items():
             if not isinstance(field, EnvField):
-                logger.debug(f"Skipping class variable {field_name!r}, not a Field.")
+                logger.debug("Skipping class variable %r, not a Field.", field_name)
                 continue
             fields.append(field)
         builder = FieldDocsBuilder(fields)
