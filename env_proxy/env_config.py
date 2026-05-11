@@ -13,7 +13,7 @@ from functools import cached_property, partial
 from inspect import get_annotations
 from pathlib import Path
 from types import NoneType, UnionType
-from typing import Any, Literal, TextIO, TypeVar, get_args, get_origin
+from typing import Any, ClassVar, Literal, TextIO, TypeVar, get_args, get_origin
 
 from env_proxy.env_proxy import EnvProxy
 
@@ -348,18 +348,32 @@ class EnvConfig:
     can still be initialized via override but cannot be reassigned afterwards.
     """
 
+    _valid_fields: ClassVar[frozenset[str]] = frozenset()
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        seen: set[str] = set()
+        valid: set[str] = set()
+        # Leaf-to-root: the first occurrence of each name wins, so a subclass
+        # that shadows an inherited EnvField with a non-EnvField correctly
+        # excludes that name from the valid override set.
+        for klass in cls.__mro__:
+            for name, attr in vars(klass).items():
+                if name in seen:
+                    continue
+                seen.add(name)
+                if isinstance(attr, EnvField):
+                    valid.add(name)
+        cls._valid_fields = frozenset(valid)
+
     def __init__(self, **overrides: Any) -> None:
-        cls = type(self)
-        valid_fields = {
-            name for klass in reversed(cls.__mro__) for name, attr in vars(klass).items() if isinstance(attr, EnvField)
-        }
-        unknown = set(overrides) - valid_fields
+        unknown = overrides.keys() - self._valid_fields
         if unknown:
             raise ValueError(
-                f"Unknown override key(s) for {cls.__name__}: {sorted(unknown)}. "
-                f"Valid field names: {sorted(valid_fields)}"
+                f"Unknown override key(s) for {type(self).__name__}: {sorted(unknown)}. "
+                f"Valid field names: {sorted(self._valid_fields)}"
             )
-        self._overrides: dict[str, Any] = overrides
+        self._overrides: dict[str, Any] = dict(overrides)
 
     @classmethod
     def __generate_env_file_content(

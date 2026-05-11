@@ -463,6 +463,30 @@ def test_override_unknown_kwarg_raises() -> None:
         BasicConfig(typo=1)  # type: ignore[call-arg]
 
 
+def test_override_for_shadowed_field_is_rejected() -> None:
+    """A subclass that shadows an inherited EnvField with a non-EnvField value
+    opts out of the field. Overrides keyed on the shadowed name must raise
+    ValueError, not be silently dropped at read time.
+    """
+
+    class Base(EnvConfig):
+        env_proxy = EnvProxy(prefix="SHADOW")
+        shadowed: int = Field()
+
+    class Sub(Base):
+        shadowed = 1
+
+    with pytest.raises(ValueError, match=r"Unknown override key\(s\) for Sub: \['shadowed'\]"):
+        Sub(shadowed=42)
+
+
+def test_valid_fields_cached_on_class() -> None:
+    """Per-class field roster is computed once and exposed for fast __init__ lookup."""
+    assert "integer" in BasicConfig._valid_fields
+    assert "supports_set" in BasicConfig._valid_fields
+    assert isinstance(BasicConfig._valid_fields, frozenset)
+
+
 def test_empty_construction_unchanged() -> None:
     """No-kwarg construction still reads from env exactly as before."""
     with apply_env(INTEGER="7"):
