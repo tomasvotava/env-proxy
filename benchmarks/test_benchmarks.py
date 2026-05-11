@@ -10,6 +10,7 @@ asserted on — this suite is observation-only.
 """
 
 import os
+import warnings
 
 from pytest_benchmark.fixture import BenchmarkFixture
 
@@ -56,3 +57,17 @@ def test_envconfig_read_env_fallthrough(benchmark: BenchmarkFixture, bench_confi
 
 def test_envconfig_read_override_hit(benchmark: BenchmarkFixture, bench_config_with_overrides: EnvConfig) -> None:
     benchmark(lambda: bench_config_with_overrides.str_field)  # type: ignore[attr-defined]
+
+
+def test_envconfig_read_frozen(benchmark: BenchmarkFixture, bench_config_frozen: EnvConfig) -> None:
+    benchmark(lambda: bench_config_frozen.str_field)  # type: ignore[attr-defined]
+
+
+def test_envconfig_freeze_cost(benchmark: BenchmarkFixture, bench_config_cls: type[EnvConfig]) -> None:
+    def freeze_once() -> None:
+        cfg = bench_config_cls()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cfg.freeze()
+
+    benchmark(freeze_once)

@@ -1,7 +1,7 @@
 # EnvProxy
 
 `EnvProxy` is a Python package that provides a convenient proxy for accessing environment variables with type hints,
-type conversion, and customizable options for key formatting. It alos includes `EnvConfig`, which lets you define
+type conversion, and customizable options for key formatting. It also includes `EnvConfig`, which lets you define
 configuration classes that map directly to environment variables. With `EnvConfig`, you can declaratively
 describe your environment-based configuration, including defaults, type hints,
 and optional sample `.env` file generation.
@@ -192,6 +192,68 @@ so mypy and Pyright/Pylance synthesize a typed `__init__` from each subclass's a
 typos (`AppConfig(timout=5)`) and wrong value types (`AppConfig(timeout="bad")`) are flagged at
 type-check time, and IDEs autocomplete field names with their declared types.
 
+#### Validating and Freezing Configuration
+
+`EnvConfig` resolves each field lazily, on first access. Two methods change
+that for production use:
+
+- **`.validate()`** — eagerly resolves every field and raises
+  `EnvValidationError` if any field is missing or malformed. All field
+  failures are aggregated into one exception; inspect its `.errors`
+  mapping (field name → underlying exception) to see them all.
+- **`.freeze()`** — resolves every field once and caches the result on
+  the instance. Reads become a single dict lookup (~200ns versus ~1.3µs
+  for a fresh env lookup). Assignment is disallowed after freezing —
+  even for fields with `allow_set=True`, which are listed in a
+  `UserWarning` at the moment of freezing. Use the `.is_frozen` property
+  to check the current state.
+
+The two methods are independent. Call `.validate()` alone if you want
+eager checks but still need runtime mutability; combine both at startup
+to fail fast and then lock the config for the rest of the process:
+
+```python
+config = MyConfig()
+config.validate()
+config.freeze()
+
+assert config.is_frozen
+```
+
+#### Exception Types
+
+`env_proxy` raises four typed exceptions, all subclasses of both
+`EnvProxyError` and `ValueError`:
+
+- `EnvProxyError` — base class. Catch this to handle every error raised
+  by the library in one block.
+- `EnvKeyMissingError` — a required env var is absent and no default
+  was given. The env var name is on `.key`.
+- `EnvValueError` — an env value couldn't be converted to the target
+  type. Inspect `.key`, `.value`, and `.target` for the offending env
+  var, its raw string, and the type label. The underlying exception
+  (e.g. from a `convert_using` callable) is available on `__cause__`.
+- `EnvValidationError` — raised by `.validate()`. The `.errors`
+  mapping holds the underlying exception for each failing field, keyed
+  by Python field name.
+
+Because every exception is also a `ValueError`, a single `except
+ValueError:` block catches them all alongside other `ValueError`
+sources in your code.
+
+```python
+from env_proxy import EnvValidationError
+
+try:
+    cfg.validate()
+except EnvValidationError as exc:
+    for name, error in exc.errors.items():
+        log.error("config field %s failed: %s", name, error)
+        if error.__cause__ is not None:
+            log.debug("caused by: %r", error.__cause__)
+    raise
+```
+
 #### Generating a Sample `.env` File
 
 You can export a sample `.env` file from your `EnvConfig` class, which documents all fields with their
@@ -231,6 +293,11 @@ Each Field can be customized with the following options:
 - `type_hint`: Specify the type explicitly (e.g., json for JSON objects).
 - `env_prefix`: Override the env_prefix set on the EnvConfig class for a specific field.
 - `allow_set`: Allow modification of the environment variable value at runtime.
+- `convert_using`: Callable that converts the raw `str` env value into the field's
+  target type (see [Custom converters](#custom-converters)).
+- `type_name`: Override the type label used in exported `.env` files and in
+  `EnvValueError` messages. Useful for lambdas, `functools.partial`, or other
+  callables that don't have a meaningful `__name__`.
 
 #### Field Type Hints
 
@@ -250,6 +317,51 @@ Example of using `type_hint`:
 class AdvancedConfig(EnvConfig):
     settings: dict[str, Any] = Field(type_hint="json", description="Complex JSON settings")
 ```
+
+#### Custom converters
+
+When the built-in type set isn't enough — most commonly for enums or types like
+`Decimal` / `pathlib.Path` — pass a callable as `convert_using`. The callable
+receives the raw `str` from the environment and must return the typed value:
+
+```python
+import enum
+from decimal import Decimal
+from env_proxy import EnvConfig, Field
+
+class Level(enum.Enum):
+    LOW = "low"
+    HIGH = "high"
+
+class AppConfig(EnvConfig):
+    level: Level = Field(convert_using=Level, default=Level.LOW)
+    amount: Decimal = Field(convert_using=Decimal)
+```
+
+Behavior:
+
+- The converter is called **only when the env value is present**. If the env
+  var is missing and a `default` is provided, the default is returned as-is —
+  supply a default of the target type (e.g. `default=Level.LOW`, not
+  `default="low"`).
+- If the converter raises, the exception is wrapped in `EnvValueError`. The
+  original exception is preserved on `__cause__`.
+- Passing both `convert_using` and `type_hint` emits a `UserWarning` and
+  ignores `type_hint`.
+- The annotation on the field is informational (used by static type
+  checkers); `convert_using` is the source of truth for runtime conversion.
+
+For the type label shown in exported `.env` files and `EnvValueError`
+messages, the resolution order is:
+
+1. Explicit `type_name=` if given.
+2. The field annotation, if it's a simple type (`int`, `Level`, …).
+3. `convert_using.__name__`, unless it would be `"<lambda>"`.
+4. Fallback: `"custom"`.
+
+So `field: Level = Field(convert_using=Level)` renders as `(Level)` in
+`.env` exports, and `field = Field(convert_using=lambda s: ..., type_name="Doubled")`
+renders as `(Doubled)`.
 
 ### Example Usage with `EnvConfig`
 
@@ -294,16 +406,43 @@ proxy = EnvProxy(prefix="myapp", uppercase=True, underscored=False)
 proxy.get_any("var")  # Looks for "MYAPP_VAR"
 ```
 
+### Tuning the Key Cache
+
+`env_proxy` caches the prefixed env-var key computation in an `lru_cache`
+sized at **1024** entries by default. For apps with many fields, or many
+`EnvProxy` instances with different prefixes / case rules, increase the
+cache via the `ENV_PROXY_KEY_CACHE_SIZE` environment variable:
+
+```bash
+ENV_PROXY_KEY_CACHE_SIZE=4096 python -m myapp
+```
+
+The value is resolved **at import time** — setting or changing it after
+`env_proxy` is imported has no effect. Invalid values (non-integer) fall
+back to the default and emit a warning.
+
 ## Error Handling
 
-If a variable is not found, and no default value is provided, a `ValueError` will be raised.
-Each method also raises a `ValueError` for invalid conversions.
+A missing required env var raises `EnvKeyMissingError`. An env var whose
+value can't be cast to the target type raises `EnvValueError`. Both
+inherit from `ValueError`, so a single `except ValueError:` covers both.
+See [Exception Types](#exception-types) for the full hierarchy and the
+attributes each exception carries.
 
 ```python
+from env_proxy import EnvProxy, EnvKeyMissingError, EnvValueError
+
+proxy = EnvProxy()
 try:
     missing_value = proxy.get_int("missing_key")
-except ValueError as e:
-    print(e)  # Output: No value found for key 'missing_key' in the environment.
+except EnvKeyMissingError as e:
+    print(e.key)  # 'missing_key'
+
+try:
+    bad_value = proxy.get_int("PORT")  # if PORT="not-a-number"
+except EnvValueError as e:
+    print(e.target)  # 'int'
+    print(e.value)   # 'not-a-number'
 ```
 
 ## License

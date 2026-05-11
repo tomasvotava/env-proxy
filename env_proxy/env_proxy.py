@@ -9,6 +9,7 @@ from functools import lru_cache
 from typing import Any, TypeVar, overload
 
 from ._sentinel import UNSET, Sentinel
+from .exceptions import EnvKeyMissingError, EnvValueError
 
 T = TypeVar("T")
 
@@ -49,7 +50,21 @@ def apply_env(**env: str) -> Iterator[None]:
                 del os.environ[key]
 
 
-@lru_cache(maxsize=100)
+_DEFAULT_KEY_CACHE_SIZE = 1024
+
+
+def _resolve_key_cache_size() -> int:
+    raw = os.getenv("ENV_PROXY_KEY_CACHE_SIZE")
+    if raw is None:
+        return _DEFAULT_KEY_CACHE_SIZE
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Invalid ENV_PROXY_KEY_CACHE_SIZE=%r; falling back to default %d.", raw, _DEFAULT_KEY_CACHE_SIZE)
+        return _DEFAULT_KEY_CACHE_SIZE
+
+
+@lru_cache(maxsize=_resolve_key_cache_size())
 def _get_prefixed_key(key: str, prefix: str | None, uppercase: bool, underscored: bool) -> str:
     prefix = f"{prefix}_" if prefix else ""
     key = f"{prefix}{key}"
@@ -75,18 +90,18 @@ class EnvProxy:
     def _get_raw(self, key: str) -> str | None:
         """Get raw value from the environment."""
         key = self._get_key(key)
-        logger.debug(f"Attempting to read {key!r} from env.")
+        logger.debug("Attempting to read %r from env.", key)
         value = os.getenv(key, None)
         if not value:
             value = None
         if value is None:
-            logger.debug(f"No value for key {key!r} in env.")
+            logger.debug("No value for key %r in env.", key)
         return value
 
     def _resolve_default(self, key: str, default: T | Sentinel = UNSET) -> T:
         if isinstance(default, Sentinel):
-            raise ValueError(f"No value found for key {key!r} in the environment.")
-        logger.debug(f"Using default value for key {key!r}.")
+            raise EnvKeyMissingError(key)
+        logger.debug("Using default value for key %r.", key)
         return default
 
     @overload
@@ -128,9 +143,7 @@ class EnvProxy:
             return True
         if value.lower() in bool_falsy:
             return False
-        raise ValueError(
-            f"Key {key!r} is present in the environment, but its value {value!r} is neither truthy, nor falsy."
-        )
+        raise EnvValueError(key, value, "bool")
 
     @overload
     def get_str(self, key: str, default: T) -> str | T: ...
@@ -164,7 +177,7 @@ class EnvProxy:
         try:
             return int(value)
         except ValueError as error:
-            raise ValueError(f"Value for key {key!r} is not a valid integer.") from error
+            raise EnvValueError(key, value, "int") from error
 
     @overload
     def get_float(self, key: str, default: T) -> float | T: ...
@@ -182,7 +195,7 @@ class EnvProxy:
         try:
             return float(value)
         except ValueError as error:
-            raise ValueError(f"Value for key {key!r} is not a valid float.") from error
+            raise EnvValueError(key, value, "float") from error
 
     @overload
     def get_list(self, key: str, default: T, *, separator: str = ",", strip: bool = True) -> list[str] | T: ...
