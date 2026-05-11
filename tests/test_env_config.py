@@ -1,10 +1,12 @@
 """Test EnvConfig configurations."""
 
+import enum
 import json
 import logging
 import os
 import sys
 import warnings
+from decimal import Decimal
 from functools import partial
 from io import StringIO
 from pathlib import Path
@@ -683,3 +685,120 @@ def test_validate_then_freeze_works() -> None:
         with pytest.warns(UserWarning, match=r"allow_set=True"):
             config.freeze()
     assert config.name == "n"
+
+
+class _Level(enum.Enum):
+    LOW = "low"
+    HIGH = "high"
+
+
+class ConvertingConfig(EnvConfig):
+    env_proxy = EnvProxy(prefix="CVT")
+    level: _Level = Field(convert_using=_Level)
+    amount: Decimal = Field(convert_using=Decimal, default=Decimal("0"))
+    level_optional: _Level = Field(convert_using=_Level, default=_Level.LOW)
+
+
+def test_convert_using_enum() -> None:
+    with apply_env(CVT_LEVEL="high"):
+        config = ConvertingConfig()
+        assert config.level is _Level.HIGH
+
+
+def test_convert_using_callable_returns_typed_value() -> None:
+    with apply_env(CVT_LEVEL="low", CVT_AMOUNT="3.14"):
+        config = ConvertingConfig()
+        assert config.amount == Decimal("3.14")
+
+
+def test_convert_using_propagates_converter_errors() -> None:
+    with apply_env(CVT_LEVEL="nope"):
+        config = ConvertingConfig()
+        with pytest.raises(ValueError, match=r"'nope' is not a valid _Level"):
+            _ = config.level
+
+
+def test_convert_using_skips_converter_when_default_used() -> None:
+    sentinel_calls: list[str] = []
+
+    def _spy(value: str) -> _Level:
+        sentinel_calls.append(value)
+        return _Level(value)
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="SPY")
+        level: _Level = Field(convert_using=_spy, default=_Level.LOW)
+
+    # Env unset → default served as-is, converter not called.
+    config = Cfg()
+    assert config.level is _Level.LOW
+    assert sentinel_calls == []
+
+
+def test_convert_using_without_default_raises_when_env_missing() -> None:
+    config = ConvertingConfig()
+    with pytest.raises(ValueError, match=r"No value found for key 'level'"):
+        _ = config.level
+
+
+def test_convert_using_with_type_hint_warns_and_wins() -> None:
+    with pytest.warns(UserWarning, match=r"convert_using overrides type_hint='int'"):
+
+        class Cfg(EnvConfig):
+            env_proxy = EnvProxy(prefix="WARN")
+            level: _Level = Field(convert_using=_Level, type_hint="int")
+
+    with apply_env(WARN_LEVEL="high"):
+        config = Cfg()
+        assert config.level is _Level.HIGH
+
+
+def test_convert_using_export_emits_callable_name() -> None:
+    buf = StringIO()
+    ConvertingConfig.export_env(buf, include_defaults=False)
+    content = buf.getvalue()
+    assert "(_Level)" in content
+    assert "(Decimal)" in content
+
+
+def test_convert_using_with_lambda_export_falls_back_to_custom() -> None:
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="LAM")
+        v: int = Field(convert_using=lambda s: int(s) * 2)
+
+    buf = StringIO()
+    Cfg.export_env(buf, include_defaults=False)
+    # Lambdas have __name__ == "<lambda>", which is technically a name —
+    # the fallback "custom" only fires for objects without __name__.
+    content = buf.getvalue()
+    assert "(<lambda>)" in content
+
+
+def test_convert_using_export_fallback_when_no_dunder_name() -> None:
+    class Callable:
+        def __call__(self, value: str) -> int:
+            return int(value)
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="CB")
+        v: int = Field(convert_using=Callable())
+
+    buf = StringIO()
+    Cfg.export_env(buf, include_defaults=False)
+    assert "(custom)" in buf.getvalue()
+
+
+def test_convert_using_freeze_caches_converted_value() -> None:
+    with apply_env(CVT_LEVEL="high"):
+        config = ConvertingConfig()
+        config.freeze()
+    # Converter not called again on read after freeze; value preserved.
+    assert config.level is _Level.HIGH
+
+
+def test_convert_using_validate_catches_converter_error() -> None:
+    with (
+        apply_env(CVT_LEVEL="bogus"),
+        pytest.raises(ValueError, match=r"ConvertingConfig failed validation"),
+    ):
+        ConvertingConfig().validate()

@@ -91,6 +91,7 @@ class EnvField:
         allow_set: bool | None = None,
         type_hint: TypeHint | None = None,
         optional: bool | None = None,
+        convert_using: Callable[[str], Any] | None = None,
     ) -> None:
         self.alias = alias
         self.description = description
@@ -104,6 +105,13 @@ class EnvField:
         self._allow_set = allow_set
         self.optional = optional
         self.type_hint = type_hint
+        self._convert_using = convert_using
+        if convert_using is not None and type_hint is not None:
+            warnings.warn(
+                f"convert_using overrides type_hint={type_hint!r}; type_hint will be ignored.",
+                UserWarning,
+                stacklevel=3,
+            )
         self._annotation: Any = None
 
     @property
@@ -176,6 +184,17 @@ class EnvField:
             RuntimeError: If the annotation is too complicated and strict mode is enabled.
 
         """
+        if self._convert_using is not None:
+            proxy = self.env_proxy
+            convert = self._convert_using
+
+            def _custom_getter(key: str, default: Any) -> Any:
+                raw = proxy._get_raw(key)
+                if raw is None:
+                    return proxy._resolve_default(key, default)
+                return convert(raw)
+
+            return _custom_getter
         if self.type_hint is not None:
             return _get_type_hint_handler(self.type_hint, self.env_proxy)
         if self._annotation is None:
@@ -274,9 +293,13 @@ def Field(  # noqa: N802
     strict: bool | None = None,
     allow_set: bool | None = None,
     type_hint: TypeHint | None = None,
+    convert_using: Callable[[str], Any] | None = None,
 ) -> Any:
     # A factory function that will help us deal with our descriptor's typehinting issues.
-    return EnvField(alias, description, default, env_proxy, env_prefix, strict, allow_set, type_hint)
+    return EnvField(
+        alias, description, default, env_proxy, env_prefix, strict, allow_set, type_hint,
+        convert_using=convert_using,
+    )
 
 
 class FieldDocsBuilder:
@@ -287,6 +310,8 @@ class FieldDocsBuilder:
 
     @staticmethod
     def _get_field_type(field: EnvField) -> str:
+        if field._convert_using is not None:
+            return getattr(field._convert_using, "__name__", "custom")
         if field.type_hint is not None:
             return field.type_hint
         if field.simplified_annotation is not None:

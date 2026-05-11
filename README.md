@@ -231,6 +231,8 @@ Each Field can be customized with the following options:
 - `type_hint`: Specify the type explicitly (e.g., json for JSON objects).
 - `env_prefix`: Override the env_prefix set on the EnvConfig class for a specific field.
 - `allow_set`: Allow modification of the environment variable value at runtime.
+- `convert_using`: Callable that converts the raw `str` env value into the field's
+  target type (see [Custom converters](#custom-converters)).
 
 #### Field Type Hints
 
@@ -250,6 +252,38 @@ Example of using `type_hint`:
 class AdvancedConfig(EnvConfig):
     settings: dict[str, Any] = Field(type_hint="json", description="Complex JSON settings")
 ```
+
+#### Custom converters
+
+When the built-in type set isn't enough — most commonly for enums or types like
+`Decimal` / `pathlib.Path` — pass a callable as `convert_using`. The callable
+receives the raw `str` from the environment and must return the typed value:
+
+```python
+import enum
+from decimal import Decimal
+from env_proxy import EnvConfig, Field
+
+class Level(enum.Enum):
+    LOW = "low"
+    HIGH = "high"
+
+class AppConfig(EnvConfig):
+    level: Level = Field(convert_using=Level, default=Level.LOW)
+    amount: Decimal = Field(convert_using=Decimal)
+```
+
+Behavior:
+
+- The converter is called **only when the env value is present**. If the env var
+  is missing and a `default` is provided, the default is returned as-is — supply
+  a default of the target type (e.g. `default=Level.LOW`, not `default="low"`).
+- Exceptions raised by the converter propagate to the caller, matching the
+  behavior of the built-in `get_int` / `get_json` paths.
+- Passing both `convert_using` and `type_hint` raises a `UserWarning` and ignores
+  `type_hint`.
+- The annotation on the field becomes purely informational (used by static type
+  checkers). `convert_using` is the source of truth for runtime conversion.
 
 ### Example Usage with `EnvConfig`
 
