@@ -33,6 +33,8 @@ jobs:
         run: ~/.local/bin/poetry install
       - name: ruff
         run: ~/.local/bin/poetry run ruff check env_proxy tests benchmarks
+      - name: ruff format
+        run: ~/.local/bin/poetry run ruff format --check env_proxy tests benchmarks
       - name: mypy
         run: ~/.local/bin/poetry run mypy env_proxy tests benchmarks
       - name: pytest

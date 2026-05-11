@@ -16,17 +16,17 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: poetry run mypy env_proxy tests
+        entry: poetry run mypy env_proxy tests benchmarks
         pass_filenames: false
         language: system
       # Use local ruff to match version from pyproject.toml
       - id: ruff-format
         name: ruff format
-        entry: poetry run ruff format env_proxy
+        entry: poetry run ruff format env_proxy tests benchmarks
         pass_filenames: false
         language: system
       - id: ruff
         name: ruff
-        entry: poetry run ruff check env_proxy
+        entry: poetry run ruff check env_proxy tests benchmarks
         pass_filenames: false
         language: system

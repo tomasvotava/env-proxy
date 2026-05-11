@@ -1,0 +1,101 @@
+site_name: env-proxy
+site_description: Typed access to environment variables with a declarative config layer.
+site_url: https://tomasvotava.github.io/env-proxy/
+repo_url: https://github.com/tomasvotava/env-proxy
+repo_name: tomasvotava/env-proxy
+edit_uri: edit/master/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.tabs
+    - navigation.indexes
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+    - toc.follow
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - scripts/gen_api_ref.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            show_root_heading: true
+            show_root_full_path: false
+            show_source: true
+            show_signature_annotations: true
+            separate_signature: true
+            members_order: source
+            merge_init_into_class: true
+            filters: ["!^_"]
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Tutorial:
+      - tutorial/getting-started.md
+  - How-to:
+      - how-to/using-envproxy.md
+      - how-to/define-envconfig.md
+      - how-to/override-values.md
+      - how-to/validate-and-freeze.md
+      - how-to/custom-converters.md
+      - how-to/generate-sample-env.md
+      - how-to/tune-key-cache.md
+      - how-to/handle-errors.md
+  - Reference:
+      - reference/field-options.md
+      - reference/type-hints.md
+      - reference/exceptions.md
+      - reference/env-vars.md
+      - reference/key-transformations.md
+      - API: reference/api/
+  - Explanation:
+      - explanation/why-envconfig.md
+      - explanation/override-semantics.md
+      - explanation/lazy-vs-frozen.md
