@@ -203,6 +203,8 @@ class EnvField:
         if self.type_name is not None:
             return self.type_name
         sa = self.simplified_annotation
+        if sa is Any:
+            return "any"
         if isinstance(sa, type):
             return sa.__name__
         if self._convert_using is not None:
