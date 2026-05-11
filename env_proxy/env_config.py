@@ -8,7 +8,8 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Callable
+import warnings
+from collections.abc import Callable, Iterator
 from functools import cached_property, partial
 from inspect import get_annotations
 from pathlib import Path
@@ -212,7 +213,7 @@ class EnvField:
             logger.debug("Using provided EnvProxy instance.")
             return self._env_proxy
         if self._env_prefix is not None:
-            logger.debug(f"Creating EnvProxy instance using provided env_prefix {self._env_prefix!r}.")
+            logger.debug("Creating EnvProxy instance using provided env_prefix %r.", self._env_prefix)
             self._env_proxy = EnvProxy(prefix=self._env_prefix)
             return self._env_proxy
         if (inherited_value := getattr(self.owner, "env_proxy", None)) is not None and isinstance(
@@ -235,13 +236,17 @@ class EnvField:
         self._annotation = get_annotations(owner).get(field_name)
 
     def __set__(self, instance: EnvConfig, value: Any) -> None:
+        if instance.__dict__.get("_frozen") is not None:
+            raise TypeError(
+                f"Cannot set field {self.field_name!r} on {instance.__class__.__name__!r}: instance is frozen."
+            )
         if not self.allow_set:
             raise TypeError(f"Field {self.field_name!r} of {instance.__class__.__name__!r} is read-only.")
         overrides = instance.__dict__.get("_overrides")
         if overrides is not None and self.field_name in overrides:
             overrides[self.field_name] = value
         key = self.env_proxy._get_key(self.key_name)
-        logger.debug(f"Setting {key!r} in os.environ.")
+        logger.debug("Setting %r in os.environ.", key)
         if value is None:
             if key in os.environ:
                 del os.environ[key]
@@ -251,6 +256,9 @@ class EnvField:
     def __get__(self, instance: EnvConfig | None, instance_type: type[EnvConfig]) -> Any:
         if instance is None:
             return self
+        frozen = instance.__dict__.get("_frozen")
+        if frozen is not None:
+            return frozen[self.field_name]
         overrides = instance.__dict__.get("_overrides")
         if overrides is not None and self.field_name in overrides:
             return overrides[self.field_name]
@@ -374,6 +382,76 @@ class EnvConfig:
                 f"Valid field names: {sorted(self._valid_fields)}"
             )
         self._overrides: dict[str, Any] = dict(overrides)
+        self._frozen: dict[str, Any] | None = None
+
+    def _iter_resolved_fields(self) -> Iterator[tuple[str, EnvField, Any]]:
+        """Yield ``(name, field, resolved_value)`` for every Field on this instance.
+
+        Resolution mirrors :meth:`EnvField.__get__`: overrides win over env. Raises
+        whatever ``value_getter`` raises (e.g. :class:`ValueError` for missing
+        required fields). Frozen state is intentionally ignored — this helper is
+        used to *build* a frozen snapshot.
+        """
+        for name in self._valid_fields:
+            field: EnvField = getattr(type(self), name)
+            if name in self._overrides:
+                yield name, field, self._overrides[name]
+            else:
+                yield name, field, field.value_getter(field.key_name, field.default)
+
+    def freeze(self) -> None:
+        """Resolve every field once and cache the result.
+
+        After freezing, every attribute access becomes a single dict lookup,
+        bypassing the descriptor → env-lookup chain. ``__set__`` raises
+        :class:`TypeError` for all fields, including those declared with
+        ``allow_set=True``; a :class:`UserWarning` listing such fields is emitted
+        at freeze time so the lost capability is visible. Subsequent calls to
+        ``freeze()`` on an already-frozen instance are no-ops and emit a warning.
+        """
+        if self._frozen is not None:
+            warnings.warn(
+                f"{type(self).__name__} is already frozen; freeze() is a no-op.",
+                stacklevel=2,
+            )
+            return
+        snapshot: dict[str, Any] = {}
+        mutable: list[str] = []
+        for name, field, value in self._iter_resolved_fields():
+            snapshot[name] = value
+            if field.allow_set:
+                mutable.append(name)
+        if mutable:
+            warnings.warn(
+                f"freeze() locked fields with allow_set=True on {type(self).__name__}: "
+                f"{sorted(mutable)}. Further assignment will raise TypeError.",
+                stacklevel=2,
+            )
+        self._frozen = snapshot
+
+    def validate(self) -> None:
+        """Eagerly resolve every field and raise on any failure.
+
+        Use at service startup to fail fast on missing or malformed config.
+        All field failures are aggregated into a single :class:`ValueError`
+        so a single redeploy cycle can address the whole set. Overrides
+        supplied to :meth:`__init__` are skipped because they are already
+        typed Python values. Does not mutate state — the instance remains
+        unfrozen and overrides remain in place.
+        """
+        errors: list[str] = []
+        for name in self._valid_fields:
+            if name in self._overrides:
+                continue
+            try:
+                field: EnvField = getattr(type(self), name)
+                field.value_getter(field.key_name, field.default)
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+        if errors:
+            raise ValueError(
+                f"{type(self).__name__} failed validation:\n  - " + "\n  - ".join(errors)
+            )
 
     @classmethod
     def __generate_env_file_content(
@@ -382,7 +460,7 @@ class EnvConfig:
         fields: list[EnvField] = []
         for field_name, field in vars(cls).items():
             if not isinstance(field, EnvField):
-                logger.debug(f"Skipping class variable {field_name!r}, not a Field.")
+                logger.debug("Skipping class variable %r, not a Field.", field_name)
                 continue
             fields.append(field)
         builder = FieldDocsBuilder(fields)

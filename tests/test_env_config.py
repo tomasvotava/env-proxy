@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import warnings
 from functools import partial
 from io import StringIO
 from pathlib import Path
@@ -546,3 +547,139 @@ def test_override_set_to_none() -> None:
         config.can_be_set = None
         assert config.can_be_set is None
         assert "CAN_BE_SET" not in os.environ
+
+
+class FreezeConfig(EnvConfig):
+    env_proxy = EnvProxy(prefix="FREEZE")
+    name: str = Field()
+    port: int = Field()
+    debug: bool = Field(default=False)
+    mutable: str = Field(allow_set=True, default="initial")
+
+
+class FreezeChildConfig(FreezeConfig):
+    extra: str = Field(default="x")
+
+
+def test_freeze_captures_env_at_call_time() -> None:
+    with apply_env(FREEZE_NAME="svc", FREEZE_PORT="8080"):
+        config = FreezeConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    # Env vars are gone — frozen values should still be served.
+    assert config.name == "svc"
+    assert config.port == 8080
+    assert config.debug is False
+
+
+def test_freeze_does_not_reread_env_after_call() -> None:
+    with apply_env(FREEZE_NAME="first", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+        with apply_env(FREEZE_NAME="second", FREEZE_PORT="2"):
+            assert config.name == "first"
+            assert config.port == 1
+
+
+def test_freeze_respects_overrides() -> None:
+    with apply_env(FREEZE_NAME="from-env", FREEZE_PORT="1"):
+        config = FreezeConfig(name="from-override")
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    assert config.name == "from-override"
+    assert config.port == 1
+
+
+def test_freeze_blocks_set_even_for_allow_set_fields() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True.*\['mutable'\]"):
+            config.freeze()
+    with pytest.raises(TypeError, match=r"frozen"):
+        config.mutable = "after"
+    # Read still works.
+    assert config.mutable == "initial"
+
+
+def test_freeze_blocks_set_for_readonly_fields_too() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    with pytest.raises(TypeError, match=r"frozen"):
+        config.name = "other"
+
+
+def test_freeze_emits_no_warning_when_no_allow_set_fields() -> None:
+    class NoMutable(EnvConfig):
+        env_proxy = EnvProxy(prefix="NOMUT")
+        a: str = Field(default="x")
+
+    config = NoMutable()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        config.freeze()
+    assert config.a == "x"
+
+
+def test_double_freeze_is_noop_with_warning() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    snapshot = config._frozen
+    with pytest.warns(UserWarning, match=r"already frozen"):
+        config.freeze()
+    assert config._frozen is snapshot
+
+
+def test_freeze_includes_inherited_fields() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeChildConfig()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    assert config.name == "n"
+    assert config.port == 1
+    assert config.extra == "x"
+
+
+def test_validate_passes_when_env_is_complete() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        FreezeConfig().validate()  # no raise
+
+
+def test_validate_aggregates_missing_and_malformed() -> None:
+    with (
+        apply_env(FREEZE_PORT="not-an-int"),
+        pytest.raises(ValueError, match=r"FreezeConfig failed validation") as excinfo,
+    ):
+        FreezeConfig().validate()
+    msg = str(excinfo.value)
+    assert "name:" in msg  # missing
+    assert "port:" in msg  # malformed
+
+
+def test_validate_skips_overrides() -> None:
+    # name has no env, but supplied via override — should not raise.
+    with apply_env(FREEZE_PORT="1"):
+        FreezeConfig(name="provided").validate()
+
+
+def test_validate_does_not_freeze() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        config.validate()
+        assert config._frozen is None
+        # Still mutable through allow_set path.
+        config.mutable = "changed"
+        assert config.mutable == "changed"
+
+
+def test_validate_then_freeze_works() -> None:
+    with apply_env(FREEZE_NAME="n", FREEZE_PORT="1"):
+        config = FreezeConfig()
+        config.validate()
+        with pytest.warns(UserWarning, match=r"allow_set=True"):
+            config.freeze()
+    assert config.name == "n"
