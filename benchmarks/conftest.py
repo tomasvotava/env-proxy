@@ -1,11 +1,11 @@
 """Shared fixtures for the benchmark suite."""
 
-import os
 from collections.abc import Iterator
 
 import pytest
 
 from env_proxy import EnvConfig, EnvProxy, Field
+from env_proxy.env_proxy import apply_env
 
 BENCH_ENV = {
     "BENCH_STR": "hello",
@@ -17,14 +17,8 @@ BENCH_ENV = {
 
 @pytest.fixture(scope="module")
 def bench_env() -> Iterator[None]:
-    saved = {k: os.environ.get(k) for k in BENCH_ENV}
-    os.environ.update(BENCH_ENV)
-    yield
-    for k, v in saved.items():
-        if v is None:
-            os.environ.pop(k, None)
-        else:
-            os.environ[k] = v
+    with apply_env(**BENCH_ENV):
+        yield
 
 
 @pytest.fixture(scope="module")
