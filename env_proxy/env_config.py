@@ -469,8 +469,9 @@ class EnvConfig:
         required fields). Frozen state is intentionally ignored — this helper is
         used to *build* a frozen snapshot.
         """
+        cls = type(self)
         for name in self._valid_fields:
-            field: EnvField = getattr(type(self), name)
+            field: EnvField = getattr(cls, name)
             if name in self._overrides:
                 yield name, field, self._overrides[name]
             else:
@@ -522,11 +523,12 @@ class EnvConfig:
         :meth:`freeze` afterwards if you also want to lock in the values.
         """
         errors: dict[str, EnvProxyError] = {}
+        cls = type(self)
         for name in self._valid_fields:
             if name in self._overrides:
                 continue
             try:
-                field: EnvField = getattr(type(self), name)
+                field: EnvField = getattr(cls, name)
                 field.value_getter(field.key_name, field.default)
             except EnvProxyError as exc:
                 errors[name] = exc
