@@ -414,3 +414,135 @@ def test_can_set_to_none() -> None:
         assert config.can_be_set == "some str"
         config.can_be_set = None
         assert config.can_be_set is None
+
+
+def test_override_basic() -> None:
+    """A constructor override returns the typed value with no env access."""
+    config = BasicConfig(integer=42)
+    assert config.integer == 42
+
+
+def test_override_beats_env() -> None:
+    """An override wins over a value present in the environment."""
+    with apply_env(INTEGER="1"):
+        config = BasicConfig(integer=42)
+        assert config.integer == 42
+        assert os.environ["INTEGER"] == "1"
+
+
+def test_override_beats_default() -> None:
+    """An override wins over a Field's declared default."""
+    config = BasicConfig(has_default=99.5)
+    assert config.has_default == 99.5
+
+
+def test_override_typed_values_bypass_conversion() -> None:
+    """Override values are used as-is — typed Python objects, no string parsing."""
+    services = ["a", "b"]
+    config = SimpleConfig(timeout=3.5, services=services, backoff=10)
+    assert config.timeout == 3.5
+    assert config.services is services
+    assert config.backoff == 10
+
+
+def test_override_with_alias_or_prefix() -> None:
+    """Overrides are keyed by Python field name, regardless of alias/prefix."""
+    config = BasicConfig(field_with_alias=2.71, has_prefix="hello")
+    assert config.field_with_alias == 2.71
+    assert config.has_prefix == "hello"
+
+
+def test_override_inherited_field() -> None:
+    """Fields declared on a base class can be overridden on a subclass instance."""
+    config = InheritConfig(integer=42)
+    assert config.integer == 42
+
+
+def test_override_unknown_kwarg_raises() -> None:
+    with pytest.raises(ValueError, match=r"Unknown override key\(s\) for BasicConfig: \['typo'\]"):
+        BasicConfig(typo=1)  # type: ignore[call-arg]
+
+
+def test_override_for_shadowed_field_is_rejected() -> None:
+    """A subclass that shadows an inherited EnvField with a non-EnvField value
+    opts out of the field. Overrides keyed on the shadowed name must raise
+    ValueError, not be silently dropped at read time.
+    """
+
+    class Base(EnvConfig):
+        env_proxy = EnvProxy(prefix="SHADOW")
+        shadowed: int = Field()
+
+    class Sub(Base):
+        shadowed = 1
+
+    with pytest.raises(ValueError, match=r"Unknown override key\(s\) for Sub: \['shadowed'\]"):
+        Sub(shadowed=42)
+
+
+def test_valid_fields_cached_on_class() -> None:
+    """Per-class field roster is computed once and exposed for fast __init__ lookup."""
+    assert "integer" in BasicConfig._valid_fields
+    assert "supports_set" in BasicConfig._valid_fields
+    assert isinstance(BasicConfig._valid_fields, frozenset)
+
+
+def test_empty_construction_unchanged() -> None:
+    """No-kwarg construction still reads from env exactly as before."""
+    with apply_env(INTEGER="7"):
+        config = BasicConfig()
+        assert config.integer == 7
+
+
+def test_override_set_updates_both_override_and_env() -> None:
+    """Setting an overridden allow_set=True field updates the override AND os.environ."""
+    config = BasicConfig(supports_set="initial")
+    try:
+        assert config.supports_set == "initial"
+        config.supports_set = "updated"
+        assert config.supports_set == "updated"
+        assert os.environ["SUPPORTS_SET"] == "updated"
+    finally:
+        os.environ.pop("SUPPORTS_SET", None)
+
+
+def test_override_set_non_overridden_field_falls_through() -> None:
+    """Setting a non-overridden allow_set=True field hits env only — no override entry."""
+    config = BasicConfig(integer=42)
+    try:
+        config.supports_set = "via env"
+        assert os.environ["SUPPORTS_SET"] == "via env"
+        assert config.supports_set == "via env"
+        assert "supports_set" not in config._overrides
+    finally:
+        os.environ.pop("SUPPORTS_SET", None)
+
+
+def test_override_readonly_field_cannot_be_reassigned() -> None:
+    """allow_set=False keeps gating mutation even when the field was overridden at construction."""
+    config = BasicConfig(integer=42)
+    assert config.integer == 42
+    with pytest.raises(TypeError, match=r"Field 'integer' of 'BasicConfig' is read-only."):
+        config.integer = 100
+
+
+def test_class_level_field_access_returns_descriptor() -> None:
+    """Class-level attribute access returns the EnvField descriptor (standard descriptor idiom)."""
+    assert isinstance(BasicConfig.integer, EnvField)
+    assert BasicConfig.integer.field_name == "integer"
+
+
+def test_override_with_none_at_construction() -> None:
+    """Override with literal None returns None without touching env."""
+    config = BasicConfig(has_default=None)
+    assert config.has_default is None
+
+
+def test_override_set_to_none() -> None:
+    """Setting an overridden allow_set=True field to None deletes the env key and stores None."""
+    with apply_env(CAN_BE_SET="initial"):
+        config = AllowSetToNone(can_be_set="overridden")
+        assert config.can_be_set == "overridden"
+        config.can_be_set = None
+        assert config.can_be_set is None
+        assert "CAN_BE_SET" not in os.environ

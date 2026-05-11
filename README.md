@@ -154,6 +154,44 @@ debug = config.debug  # Looks for MYAPP_DEBUG in the environment
 database_url = config.database_url  # Raises ValueError if not found
 ```
 
+#### Overriding Values per Instance
+
+`EnvConfig` accepts keyword arguments to override individual fields on a per-instance basis.
+Overrides take precedence over the environment, letting you layer the env-derived config with
+values from any other source — a config file, CLI arguments, programmatic wiring, fixtures —
+without touching `os.environ`.
+
+```python
+class AppConfig(EnvConfig):
+    env_proxy = EnvProxy(prefix="APP")
+    timeout: int = Field(default=30)
+    services: list[str] = Field(default=[])
+
+# Layer env with values loaded from a config file:
+file_config = load_yaml("app.yaml")  # {"timeout": 5, "services": ["redis", "rabbitmq"]}
+cfg = AppConfig(**file_config)
+
+assert cfg.timeout == 5
+assert cfg.services == ["redis", "rabbitmq"]
+```
+
+Semantics:
+
+- Keys are **Python field names** (not env-var keys), regardless of any `alias` or `env_prefix`.
+- Values are **used as-is** — no string parsing or type conversion. Pass real `int`, `list`, `dict`, etc.
+- Overrides **shadow the environment** for reads on that instance only; other instances and direct
+  `os.environ` access are unaffected.
+- Unknown override keys raise `ValueError`, listing the valid field names — typo-proof.
+- Fields with `allow_set=False` can be initialized via override but cannot be reassigned afterwards;
+  the `allow_set` contract is unchanged.
+- For fields with `allow_set=True`, assignment after construction updates both the override entry
+  *and* `os.environ` (preserving the existing side-effect contract).
+
+Overrides are statically type-checked. `EnvConfig` is decorated with PEP 681's `dataclass_transform`,
+so mypy and Pyright/Pylance synthesize a typed `__init__` from each subclass's annotated fields:
+typos (`AppConfig(timout=5)`) and wrong value types (`AppConfig(timeout="bad")`) are flagged at
+type-check time, and IDEs autocomplete field names with their declared types.
+
 #### Generating a Sample `.env` File
 
 You can export a sample `.env` file from your `EnvConfig` class, which documents all fields with their

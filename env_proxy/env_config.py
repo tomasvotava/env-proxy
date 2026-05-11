@@ -2,19 +2,27 @@
 auto-documenting approach.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
+import sys
 from collections.abc import Callable
 from functools import cached_property, partial
 from inspect import get_annotations
 from pathlib import Path
 from types import NoneType, UnionType
-from typing import Any, Literal, TextIO, TypeVar, get_args, get_origin
+from typing import Any, ClassVar, Literal, TextIO, TypeVar, get_args, get_origin
 
 from env_proxy.env_proxy import EnvProxy
 
 from ._sentinel import UNSET
+
+if sys.version_info >= (3, 11):
+    from typing import dataclass_transform
+else:  # pragma: no cover
+    from typing_extensions import dataclass_transform
 
 logger = logging.getLogger(__name__)
 
@@ -68,96 +76,6 @@ def _get_simplified_annotation(annotation: Any) -> Any:
                 return effective_arg
     logger.warning(f"Annotation {annotation!r} is too complicated to parse.")
     return None
-
-
-class FieldDocsBuilder:
-    __env_field_doc_template = "# {key_name} ({field_type}) [{required}]\n{description}{env_key}={default}\n"
-
-    def __init__(self, fields: list["EnvField"]) -> None:
-        self.fields = list(fields)
-
-    @staticmethod
-    def _get_field_type(field: "EnvField") -> str:
-        if field.type_hint is not None:
-            return field.type_hint
-        if field.simplified_annotation is not None:
-            if isinstance(field.simplified_annotation, type):
-                return field.simplified_annotation.__name__
-            return str(field.simplified_annotation).lower()  # pragma: no cover, unreachable
-        return "unknown type"
-
-    @staticmethod
-    def _get_field_default(field: "EnvField") -> str:
-        if field.default in (UNSET, None):
-            return ""
-        if not isinstance(field.default, str) and field.type_hint == "json":
-            try:
-                return json.dumps(field.default)
-            except (ValueError, TypeError) as error:
-                raise ValueError(
-                    f"Failed to export default for field {field.field_name!r}. "
-                    "Its default value cannot be encoded as a JSON."
-                ) from error
-        if isinstance(field.default, list):
-            return ",".join(field.default)
-        return str(field.default)
-
-    def generate_env_file_content(self, include_defaults: bool = True, sort_by_name: bool = False) -> str:
-        lines: list[str] = []
-        if sort_by_name:
-            self.fields.sort(key=lambda field: field.key_name)
-        for field in self.fields:
-            required = "required" if field.default is UNSET else "optional"
-            default = self._get_field_default(field) if include_defaults else ""
-            field_type = self._get_field_type(field)
-            multiline_description = ""
-            if field.description:
-                multiline_description = "\n# ".join(field.description.splitlines())
-                multiline_description = "# " + multiline_description.rstrip("\n") + "\n"
-            lines.append(
-                self.__env_field_doc_template.format(
-                    key_name=field.key_name,
-                    field_type=field_type,
-                    required=required,
-                    description=multiline_description,
-                    env_key=field.env_key,
-                    default=default,
-                )
-            )
-        return "\n".join(lines)
-
-
-class EnvConfig:
-    """A base class for your configurations based on environment variables.
-
-    Use fields along with Field factory to easily describe your configuration in an self-documenting way.
-    """
-
-    @classmethod
-    def __generate_env_file_content(
-        cls: "type[EnvConfig]", include_defaults: bool = True, sort_by_name: bool = False
-    ) -> str:
-        fields: list[EnvField] = []
-        for field_name, field in vars(cls).items():
-            if not isinstance(field, EnvField):
-                logger.debug(f"Skipping class variable {field_name!r}, not a Field.")
-                continue
-            fields.append(field)
-        builder = FieldDocsBuilder(fields)
-        return builder.generate_env_file_content(include_defaults=include_defaults, sort_by_name=sort_by_name)
-
-    @classmethod
-    def export_env(
-        cls: "type[EnvConfig]",
-        file_or_path: Path | str | TextIO,
-        include_defaults: bool = True,
-        sort_by_name: bool = False,
-    ) -> None:
-        content = cls.__generate_env_file_content(include_defaults=include_defaults, sort_by_name=sort_by_name)
-        if isinstance(file_or_path, str | Path):
-            Path(file_or_path).write_text(content, encoding="utf-8")
-            return
-        file_or_path.write(content)
 
 
 class EnvField:
@@ -319,6 +237,9 @@ class EnvField:
     def __set__(self, instance: EnvConfig, value: Any) -> None:
         if not self.allow_set:
             raise TypeError(f"Field {self.field_name!r} of {instance.__class__.__name__!r} is read-only.")
+        overrides = instance.__dict__.get("_overrides")
+        if overrides is not None and self.field_name in overrides:
+            overrides[self.field_name] = value
         key = self.env_proxy._get_key(self.key_name)
         logger.debug(f"Setting {key!r} in os.environ.")
         if value is None:
@@ -327,7 +248,12 @@ class EnvField:
         else:
             os.environ[key] = str(value)
 
-    def __get__(self, instance: EnvConfig, instance_type: type[EnvConfig]) -> Any:
+    def __get__(self, instance: EnvConfig | None, instance_type: type[EnvConfig]) -> Any:
+        if instance is None:
+            return self
+        overrides = instance.__dict__.get("_overrides")
+        if overrides is not None and self.field_name in overrides:
+            return overrides[self.field_name]
         return self.value_getter(self.key_name, self.default)
 
 
@@ -343,3 +269,134 @@ def Field(  # noqa: N802
 ) -> Any:
     # A factory function that will help us deal with our descriptor's typehinting issues.
     return EnvField(alias, description, default, env_proxy, env_prefix, strict, allow_set, type_hint)
+
+
+class FieldDocsBuilder:
+    __env_field_doc_template = "# {key_name} ({field_type}) [{required}]\n{description}{env_key}={default}\n"
+
+    def __init__(self, fields: list[EnvField]) -> None:
+        self.fields = list(fields)
+
+    @staticmethod
+    def _get_field_type(field: EnvField) -> str:
+        if field.type_hint is not None:
+            return field.type_hint
+        if field.simplified_annotation is not None:
+            if isinstance(field.simplified_annotation, type):
+                return field.simplified_annotation.__name__
+            return str(field.simplified_annotation).lower()  # pragma: no cover, unreachable
+        return "unknown type"
+
+    @staticmethod
+    def _get_field_default(field: EnvField) -> str:
+        if field.default in (UNSET, None):
+            return ""
+        if not isinstance(field.default, str) and field.type_hint == "json":
+            try:
+                return json.dumps(field.default)
+            except (ValueError, TypeError) as error:
+                raise ValueError(
+                    f"Failed to export default for field {field.field_name!r}. "
+                    "Its default value cannot be encoded as a JSON."
+                ) from error
+        if isinstance(field.default, list):
+            return ",".join(field.default)
+        return str(field.default)
+
+    def generate_env_file_content(self, include_defaults: bool = True, sort_by_name: bool = False) -> str:
+        lines: list[str] = []
+        if sort_by_name:
+            self.fields.sort(key=lambda field: field.key_name)
+        for field in self.fields:
+            required = "required" if field.default is UNSET else "optional"
+            default = self._get_field_default(field) if include_defaults else ""
+            field_type = self._get_field_type(field)
+            multiline_description = ""
+            if field.description:
+                multiline_description = "\n# ".join(field.description.splitlines())
+                multiline_description = "# " + multiline_description.rstrip("\n") + "\n"
+            lines.append(
+                self.__env_field_doc_template.format(
+                    key_name=field.key_name,
+                    field_type=field_type,
+                    required=required,
+                    description=multiline_description,
+                    env_key=field.env_key,
+                    default=default,
+                )
+            )
+        return "\n".join(lines)
+
+
+@dataclass_transform(kw_only_default=True)
+class EnvConfig:
+    """A base class for your configurations based on environment variables.
+
+    Use fields along with Field factory to easily describe your configuration in an self-documenting way.
+
+    The constructor accepts keyword arguments to override individual fields on a
+    per-instance basis. Overrides take precedence over the environment, allowing
+    callers to layer env-derived config with values from any other source — a
+    config file, CLI arguments, programmatic wiring, fixtures — without mutating
+    ``os.environ``. Override values are keyed by Python field name (not env-var
+    key), are used as-is (no type conversion), and shadow the environment for
+    reads on this instance only::
+
+        cfg = MyConfig(timeout=5, services=["a", "b"])
+
+    Unknown override keys raise :class:`ValueError`. Fields with ``allow_set=False``
+    can still be initialized via override but cannot be reassigned afterwards.
+    """
+
+    _valid_fields: ClassVar[frozenset[str]] = frozenset()
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        seen: set[str] = set()
+        valid: set[str] = set()
+        # Leaf-to-root: the first occurrence of each name wins, so a subclass
+        # that shadows an inherited EnvField with a non-EnvField correctly
+        # excludes that name from the valid override set.
+        for klass in cls.__mro__:
+            for name, attr in vars(klass).items():
+                if name in seen:
+                    continue
+                seen.add(name)
+                if isinstance(attr, EnvField):
+                    valid.add(name)
+        cls._valid_fields = frozenset(valid)
+
+    def __init__(self, **overrides: Any) -> None:
+        unknown = overrides.keys() - self._valid_fields
+        if unknown:
+            raise ValueError(
+                f"Unknown override key(s) for {type(self).__name__}: {sorted(unknown)}. "
+                f"Valid field names: {sorted(self._valid_fields)}"
+            )
+        self._overrides: dict[str, Any] = dict(overrides)
+
+    @classmethod
+    def __generate_env_file_content(
+        cls: type[EnvConfig], include_defaults: bool = True, sort_by_name: bool = False
+    ) -> str:
+        fields: list[EnvField] = []
+        for field_name, field in vars(cls).items():
+            if not isinstance(field, EnvField):
+                logger.debug(f"Skipping class variable {field_name!r}, not a Field.")
+                continue
+            fields.append(field)
+        builder = FieldDocsBuilder(fields)
+        return builder.generate_env_file_content(include_defaults=include_defaults, sort_by_name=sort_by_name)
+
+    @classmethod
+    def export_env(
+        cls: type[EnvConfig],
+        file_or_path: Path | str | TextIO,
+        include_defaults: bool = True,
+        sort_by_name: bool = False,
+    ) -> None:
+        content = cls.__generate_env_file_content(include_defaults=include_defaults, sort_by_name=sort_by_name)
+        if isinstance(file_or_path, str | Path):
+            Path(file_or_path).write_text(content, encoding="utf-8")
+            return
+        file_or_path.write(content)
