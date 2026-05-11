@@ -32,8 +32,8 @@ jobs:
       - name: Install dependencies
         run: ~/.local/bin/poetry install
       - name: ruff
-        run: ~/.local/bin/poetry run ruff check env_proxy tests
+        run: ~/.local/bin/poetry run ruff check env_proxy tests benchmarks
       - name: mypy
-        run: ~/.local/bin/poetry run mypy env_proxy tests
+        run: ~/.local/bin/poetry run mypy env_proxy tests benchmarks
       - name: pytest
         run: ~/.local/bin/poetry run pytest -vv tests/

@@ -1,0 +1,25 @@
+name: Benchmark
+on:
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+env:
+  POETRY_VIRTUALENVS_CREATE: "false"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install poetry
+        run: curl -sSL https://install.python-poetry.org | python -
+      - name: Install dependencies
+        run: ~/.local/bin/poetry install
+      - name: Run benchmarks
+        run: ~/.local/bin/poetry run pytest benchmarks/ --no-cov
