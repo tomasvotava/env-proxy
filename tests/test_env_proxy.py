@@ -162,3 +162,25 @@ def test_get_list(data: str, separator: str, strip: bool, expected: list[str]) -
     with apply_env(MY_VARIABLE=data):
         proxy = EnvProxy()
         assert proxy.get_list("my-variable", separator=separator, strip=strip) == expected
+
+
+def test_key_cache_size_defaults_when_env_unset() -> None:
+    from env_proxy.env_proxy import _DEFAULT_KEY_CACHE_SIZE, _resolve_key_cache_size
+
+    os.environ.pop("ENV_PROXY_KEY_CACHE_SIZE", None)
+    assert _resolve_key_cache_size() == _DEFAULT_KEY_CACHE_SIZE
+
+
+def test_key_cache_size_honors_env_var() -> None:
+    from env_proxy.env_proxy import _resolve_key_cache_size
+
+    with apply_env(ENV_PROXY_KEY_CACHE_SIZE="256"):
+        assert _resolve_key_cache_size() == 256
+
+
+def test_key_cache_size_falls_back_on_garbage(caplog: pytest.LogCaptureFixture) -> None:
+    from env_proxy.env_proxy import _DEFAULT_KEY_CACHE_SIZE, _resolve_key_cache_size
+
+    with apply_env(ENV_PROXY_KEY_CACHE_SIZE="not-a-number"), caplog.at_level("WARNING"):
+        assert _resolve_key_cache_size() == _DEFAULT_KEY_CACHE_SIZE
+    assert any("ENV_PROXY_KEY_CACHE_SIZE" in rec.message for rec in caplog.records)
