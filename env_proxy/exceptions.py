@@ -1,9 +1,25 @@
 """Exceptions raised by env-proxy.
 
-Every exception in this module inherits from both :class:`EnvProxyError`
-and :class:`ValueError`. Catch :class:`EnvProxyError` to handle errors
-specific to this library; catch :class:`ValueError` if you want one
-handler for env-proxy errors alongside other validation errors.
+:class:`EnvProxyError` is the catch-all base for every typed exception
+raised by this library. The three value-shaped subclasses
+(:class:`EnvKeyMissingError`, :class:`EnvValueError`,
+:class:`EnvValidationError`) also inherit from :class:`ValueError` so
+``except ValueError:`` keeps working. :class:`EnvConfigError` — raised
+for declaration/resolution mistakes — additionally inherits from
+:class:`RuntimeError` because its call sites previously raised raw
+``RuntimeError`` and the dual inheritance preserves that back-compat.
+
+Three documented deviations exist on purpose and are *not*
+:class:`EnvProxyError` instances:
+
+* :class:`json.JSONDecodeError` from :meth:`EnvProxy.get_json` — propagated
+  as-is by design; it is itself a :class:`ValueError` subclass.
+* :class:`RuntimeError` from :attr:`EnvField.field_name` /
+  :attr:`EnvField.owner` — only reachable if a free-floating ``Field()``
+  instance is used outside a class body; treated as a bug indicator.
+* :class:`TypeError` from assignment to a frozen instance or a
+  non-``allow_set`` field — matches the standard library's
+  ``@dataclass(frozen=True)`` idiom.
 """
 
 from __future__ import annotations
@@ -53,3 +69,20 @@ class EnvValidationError(EnvProxyError, ValueError):
         self.errors = errors
         lines = [f"{name}: {exc}" for name, exc in errors.items()]
         super().__init__(f"{config_name} failed validation:\n  - " + "\n  - ".join(lines))
+
+
+class EnvConfigError(EnvProxyError, RuntimeError, ValueError):
+    """Raised when an :class:`EnvConfig` is declared or resolved incorrectly.
+
+    Covers: unsupported ``type_hint=`` strings, strict-mode failures to
+    determine a value getter from an annotation (missing or too-complex
+    annotation), reserved field names, unknown override keys passed to
+    :class:`EnvConfig`, and ``type_hint='json'`` fields whose default is
+    not JSON-encodable.
+
+    Inherits from both :class:`RuntimeError` and :class:`ValueError` so
+    that legacy ``except RuntimeError`` / ``except ValueError`` handlers
+    keep working after the migration from raw built-in exceptions. New
+    code should prefer ``except EnvProxyError`` (or this class directly)
+    for clarity.
+    """

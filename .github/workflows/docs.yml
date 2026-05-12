@@ -19,6 +19,7 @@ concurrency:
 
 env:
   POETRY_VIRTUALENVS_CREATE: "false"
+  DISABLE_MKDOCS_2_WARNING: "true"
 
 jobs:
   build:

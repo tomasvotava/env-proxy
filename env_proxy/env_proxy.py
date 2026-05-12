@@ -229,10 +229,15 @@ class EnvProxy:
     def get_json(self, key: str) -> Any: ...
 
     def get_json(self, key: str, default: T | Sentinel = UNSET) -> Any | T:
-        """Get a JSON and parse it using `json.loads` from the environment.
+        """Get a JSON value and parse it using :func:`json.loads`.
 
-        If default is not given and the key does not exist, ValueError is raised.
-        Exception raised by `json.loads` are propagated.
+        If the key is missing and no default is given, raises
+        :class:`EnvKeyMissingError`. If the value is present but is not
+        valid JSON, :class:`json.JSONDecodeError` (itself a
+        :class:`ValueError` subclass) is propagated unchanged — this is
+        the one documented deviation from env-proxy's
+        ``EnvProxyError``-only contract. See
+        :mod:`env_proxy.exceptions` for details.
         """
         value = self._get_raw(key)
         if value is None:

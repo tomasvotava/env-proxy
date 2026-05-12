@@ -19,7 +19,7 @@ from typing import Any, ClassVar, Literal, TextIO, TypeVar, get_args, get_origin
 from env_proxy.env_proxy import EnvProxy
 
 from ._sentinel import UNSET
-from .exceptions import EnvProxyError, EnvValidationError, EnvValueError
+from .exceptions import EnvConfigError, EnvProxyError, EnvValidationError, EnvValueError
 
 if sys.version_info >= (3, 11):
     from typing import dataclass_transform
@@ -51,7 +51,7 @@ type_hint_map: dict[TypeHint, Callable[[EnvProxy, str, Any], Any]] = {
 def _get_type_hint_handler(type_hint: TypeHint, env_proxy: EnvProxy) -> Callable[[str, Any], Any]:
     if (handler := type_hint_map.get(type_hint)) is not None:
         return partial(handler, env_proxy)
-    raise ValueError(f"Unsupported type hint {type_hint!r}.")
+    raise EnvConfigError(f"Unsupported type hint {type_hint!r}.")
 
 
 def _annotation_to_method(env_proxy: EnvProxy) -> dict[Any, Callable[[str, Any], Any]]:
@@ -252,7 +252,7 @@ class EnvField:
     def _handle_missing_annotation(self) -> Callable[[str, Any], Any]:
         msg = f"No type annotation nor type hint found for field {self.field_name!r}."
         if self.strict:
-            raise ValueError(f"{msg} {STRING_ERROR_TO_WARNING}")
+            raise EnvConfigError(f"{msg} {STRING_ERROR_TO_WARNING}")
         logger.warning("%s Falling back to 'Any'. %s", msg, STRING_WARNING_TO_ERROR)
         return self.env_proxy.get_any
 
@@ -264,7 +264,7 @@ class EnvField:
             "No type hint was provided and the annotation is too complicated."
         )
         if self.strict:
-            raise RuntimeError(f"{msg} {STRING_ERROR_TO_WARNING}")
+            raise EnvConfigError(f"{msg} {STRING_ERROR_TO_WARNING}")
         logger.warning("%s %s", msg, STRING_WARNING_TO_ERROR)
         return self.env_proxy.get_any
 
@@ -295,7 +295,7 @@ class EnvField:
 
     def __set_name__(self, owner: type[EnvConfig], field_name: str) -> None:
         if field_name in reserved_attributes or field_name.startswith("_"):
-            raise ValueError(f"Field name {field_name!r} is reserved for internal use.")
+            raise EnvConfigError(f"Field name {field_name!r} is reserved for internal use.")
         self._owner = owner
         self._field_name = field_name
         self._annotation = get_annotations(owner).get(field_name)
@@ -375,7 +375,7 @@ class FieldDocsBuilder:
             try:
                 return json.dumps(field.default)
             except (ValueError, TypeError) as error:
-                raise ValueError(
+                raise EnvConfigError(
                     f"Failed to export default for field {field.field_name!r}. "
                     "Its default value cannot be encoded as a JSON."
                 ) from error
@@ -424,7 +424,8 @@ class EnvConfig:
 
         cfg = MyConfig(timeout=5, services=["a", "b"])
 
-    Unknown override keys raise :class:`ValueError`. Fields with ``allow_set=False``
+    Unknown override keys raise :class:`EnvConfigError` (also a
+    :class:`ValueError` for back-compat). Fields with ``allow_set=False``
     can still be initialized via override but cannot be reassigned afterwards.
     """
 
@@ -449,7 +450,7 @@ class EnvConfig:
     def __init__(self, **overrides: Any) -> None:
         unknown = overrides.keys() - self._valid_fields
         if unknown:
-            raise ValueError(
+            raise EnvConfigError(
                 f"Unknown override key(s) for {type(self).__name__}: {sorted(unknown)}. "
                 f"Valid field names: {sorted(self._valid_fields)}"
             )
@@ -490,6 +491,20 @@ class EnvConfig:
 
         Calling :meth:`freeze` again on an already-frozen instance is a no-op
         and emits a :class:`UserWarning`.
+
+        Eagerly resolves every non-overridden field, so any exception raised
+        during resolution propagates from this call. Unlike :meth:`validate`,
+        :meth:`freeze` does *not* aggregate failures: the *first* exception
+        is surfaced as-is.
+
+        Raises:
+            EnvKeyMissingError: A required field has no env value and no default.
+            EnvValueError: An env value cannot be converted to the target type.
+            EnvConfigError: The field is declared incorrectly (e.g. strict-mode
+                annotation problem surfaced at resolution time).
+            json.JSONDecodeError: A ``type_hint="json"`` field holds invalid
+                JSON. Propagated unchanged — documented deviation, see
+                :mod:`env_proxy.exceptions`.
         """
         if self._frozen is not None:
             warnings.warn(
@@ -514,13 +529,26 @@ class EnvConfig:
     def validate(self) -> None:
         """Eagerly resolve every field and raise if anything is missing or malformed.
 
-        Failures from individual fields are collected and re-raised as a single
-        :class:`EnvValidationError` whose :attr:`errors` mapping contains the
-        per-field exceptions. Fields supplied as constructor overrides are
-        already typed Python values, so they are not re-validated.
+        Every :class:`EnvProxyError` raised during field resolution is
+        captured and aggregated into a single :class:`EnvValidationError`
+        whose :attr:`errors` mapping contains the per-field exceptions.
+        This includes :class:`EnvKeyMissingError` (missing required
+        fields), :class:`EnvValueError` (failed type conversion or
+        ``convert_using`` callback), and :class:`EnvConfigError` (strict-mode
+        annotation problems surfaced at resolution time). Fields supplied
+        as constructor overrides are already typed Python values, so they
+        are not re-validated.
 
         Returns ``None`` on success. Does not mutate the instance — call
         :meth:`freeze` afterwards if you also want to lock in the values.
+
+        Two classes of exception are *not* aggregated and bubble out of
+        this call:
+
+        - :class:`json.JSONDecodeError` from a ``type_hint="json"`` field
+          (documented deviation; see :mod:`env_proxy.exceptions`).
+        - Any non-:class:`EnvProxyError` exception, treated as a library
+          bug so it can be diagnosed rather than silently swallowed.
         """
         errors: dict[str, EnvProxyError] = {}
         cls = type(self)
