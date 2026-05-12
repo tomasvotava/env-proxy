@@ -36,10 +36,10 @@ bench: ## Run benchmarks (skips coverage).
 ci: format-check lint typecheck test ## Run every check that CI runs (in order).
 
 docs-serve: ## Serve docs locally with live reload at http://127.0.0.1:8000.
-	$(POETRY) run mkdocs serve
+	DISABLE_MKDOCS_2_WARNING=true $(POETRY) run mkdocs serve
 
 docs-build: ## Build docs in --strict mode (fails on warnings).
-	$(POETRY) run mkdocs build --strict
+	DISABLE_MKDOCS_2_WARNING=true $(POETRY) run mkdocs build --strict
 
 clean: ## Remove build, cache, and coverage artifacts.
 	rm -rf site/ .coverage coverage.xml coverage.json .pytest_cache .ruff_cache .mypy_cache

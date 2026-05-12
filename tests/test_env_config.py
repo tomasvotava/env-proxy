@@ -943,3 +943,126 @@ def test_convert_using_validate_catches_converter_error() -> None:
         pytest.raises(ValueError, match=r"ConvertingConfig failed validation"),
     ):
         ConvertingConfig().validate()
+
+
+# -- Issue #14: consistent exception handling --------------------------------
+
+
+def test_env_config_error_inherits_runtime_and_value_error() -> None:
+    from env_proxy import EnvConfigError, EnvProxyError
+
+    exc = EnvConfigError("boom")
+    assert isinstance(exc, EnvProxyError)
+    assert isinstance(exc, RuntimeError)
+    assert isinstance(exc, ValueError)
+
+
+def test_strict_missing_annotation_raises_envconfigerror() -> None:
+    """Strict-mode field with no annotation/type_hint raises EnvConfigError,
+    still catchable as ValueError for back-compat."""
+    from env_proxy import EnvConfigError
+
+    with apply_env(NO_ANNOTATION="foobar"):
+        config = DifficultConfig()
+        with pytest.raises(EnvConfigError) as excinfo:
+            _ = config.no_annotation
+        assert isinstance(excinfo.value, ValueError)
+
+
+def test_strict_complicated_annotation_raises_envconfigerror() -> None:
+    """Strict-mode field with too-complex annotation raises EnvConfigError,
+    still catchable as RuntimeError for back-compat."""
+    from env_proxy import EnvConfigError
+
+    json_content = '{"fruits": ["apple"]}'
+    with apply_env(COMPLEX_STUFF=json_content):
+        config = DifficultConfig()
+        with pytest.raises(EnvConfigError) as excinfo:
+            _ = config.complex_stuff
+        assert isinstance(excinfo.value, RuntimeError)
+
+
+def test_unsupported_type_hint_raises_envconfigerror() -> None:
+    from env_proxy import EnvConfigError
+
+    env_proxy = EnvProxy()
+    with pytest.raises(EnvConfigError, match=r"Unsupported type hint 'wrong'\."):
+        _ = _get_type_hint_handler("wrong", env_proxy)  # type: ignore[arg-type]
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Reserved-name guard surfaces differently before 3.12.")
+def test_reserved_field_name_raises_envconfigerror() -> None:
+    from env_proxy import EnvConfigError
+
+    with pytest.raises(EnvConfigError, match=r"Field name '_field' is reserved for internal use."):
+
+        class _WrongField:
+            _field = Field()
+
+
+def test_unknown_override_key_raises_envconfigerror() -> None:
+    """Unknown override kwargs surface as EnvConfigError, still ValueError for back-compat."""
+    from env_proxy import EnvConfigError
+
+    with pytest.raises(EnvConfigError) as excinfo:
+        BasicConfig(typo=1)  # type: ignore[call-arg]
+    assert isinstance(excinfo.value, ValueError)
+
+
+def test_non_json_default_raises_envconfigerror() -> None:
+    """type_hint='json' with non-JSON-encodable default raises EnvConfigError at export time."""
+    from env_proxy import EnvConfigError
+
+    with pytest.raises(EnvConfigError, match=r"cannot be encoded as a JSON"):
+        UndocumentedConfig.export_env(StringIO())
+
+
+def test_validate_aggregates_envconfigerror() -> None:
+    """validate() should aggregate EnvConfigError alongside other field errors."""
+    from env_proxy import EnvConfigError, EnvKeyMissingError, EnvValidationError
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="MIX")
+        no_anno = Field()  # strict-mode + no annotation -> EnvConfigError on resolve
+        required: int = Field()  # missing -> EnvKeyMissingError
+
+    with apply_env(MIX_NO_ANNO="present"), pytest.raises(EnvValidationError) as excinfo:
+        Cfg().validate()
+    errors = excinfo.value.errors
+    assert set(errors) == {"no_anno", "required"}
+    assert isinstance(errors["no_anno"], EnvConfigError)
+    assert isinstance(errors["required"], EnvKeyMissingError)
+
+
+def test_validate_propagates_jsondecodeerror() -> None:
+    """A type_hint='json' field with invalid JSON lets JSONDecodeError bubble out of validate()."""
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="JV")
+        data: dict[str, Any] = Field(type_hint="json")
+
+    with apply_env(JV_DATA="{not json"), pytest.raises(json.JSONDecodeError):
+        Cfg().validate()
+
+
+def test_freeze_propagates_jsondecodeerror() -> None:
+    """freeze() likewise lets JSONDecodeError bubble (documented deviation)."""
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="JF")
+        data: dict[str, Any] = Field(type_hint="json")
+
+    with apply_env(JF_DATA="{not json"), pytest.raises(json.JSONDecodeError):
+        Cfg().freeze()
+
+
+def test_freeze_propagates_envconfigerror() -> None:
+    """freeze() surfaces EnvConfigError as-is — no aggregation, first failure wins."""
+    from env_proxy import EnvConfigError
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="FCE")
+        no_anno = Field()  # strict-mode + no annotation -> EnvConfigError on resolve
+
+    with apply_env(FCE_NO_ANNO="present"), pytest.raises(EnvConfigError):
+        Cfg().freeze()
