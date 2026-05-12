@@ -106,12 +106,16 @@ class EnvField:
         optional: bool | None = None,
         convert_using: Callable[[str], Any] | None = None,
         type_name: str | None = None,
+        default_factory: Callable[[], Any] | None = None,
     ) -> None:
+        if default_factory is not None and default is not UNSET:
+            raise EnvConfigError("Field() accepts either `default` or `default_factory`, not both.")
         self.alias = alias
         self.description = description
         self._env_proxy = env_proxy
         self._env_prefix = env_prefix
         self._default = default
+        self._default_factory = default_factory
         self._field_name: str | None = None
         self._owner: type[EnvConfig] | None = None
         self._value_getter: Callable[[str, Any], Any] | None = None
@@ -174,6 +178,25 @@ class EnvField:
         if self.optional or self.annotated_optional:
             return None
         return UNSET
+
+    @property
+    def has_default(self) -> bool:
+        """``True`` if the field declares any kind of default (static, factory, or implicit ``None``)."""
+        return (
+            self._default_factory is not None
+            or self._default is not UNSET
+            or bool(self.optional or self.annotated_optional)
+        )
+
+    def resolve_default(self, instance: EnvConfig) -> Any:
+        """Return the default value to use for ``instance``.
+
+        For factory-defaulted fields, returns the value cached on ``instance``
+        at construction time. Otherwise falls back to the static :attr:`default`.
+        """
+        if self._default_factory is not None:
+            return instance._factory_defaults[self.field_name]
+        return self.default
 
     @cached_property
     def annotated_optional(self) -> bool:
@@ -327,7 +350,7 @@ class EnvField:
         overrides = instance.__dict__.get("_overrides")
         if overrides is not None and self.field_name in overrides:
             return overrides[self.field_name]
-        return self.value_getter(self.key_name, self.default)
+        return self.value_getter(self.key_name, self.resolve_default(instance))
 
 
 def Field(  # noqa: N802
@@ -341,6 +364,7 @@ def Field(  # noqa: N802
     type_hint: TypeHint | None = None,
     convert_using: Callable[[str], Any] | None = None,
     type_name: str | None = None,
+    default_factory: Callable[[], Any] | None = None,
 ) -> Any:
     # A factory function that will help us deal with our descriptor's typehinting issues.
     return EnvField(
@@ -354,6 +378,7 @@ def Field(  # noqa: N802
         type_hint,
         convert_using=convert_using,
         type_name=type_name,
+        default_factory=default_factory,
     )
 
 
@@ -369,6 +394,8 @@ class FieldDocsBuilder:
 
     @staticmethod
     def _get_field_default(field: EnvField) -> str:
+        if field._default_factory is not None:
+            return ""
         if field.default in (UNSET, None):
             return ""
         if not isinstance(field.default, str) and field.type_hint == "json":
@@ -388,7 +415,7 @@ class FieldDocsBuilder:
         if sort_by_name:
             self.fields.sort(key=lambda field: field.key_name)
         for field in self.fields:
-            required = "required" if field.default is UNSET else "optional"
+            required = "optional" if field.has_default else "required"
             default = self._get_field_default(field) if include_defaults else ""
             field_type = self._get_field_type(field)
             multiline_description = ""
@@ -430,11 +457,13 @@ class EnvConfig:
     """
 
     _valid_fields: ClassVar[frozenset[str]] = frozenset()
+    _factory_fields: ClassVar[tuple[tuple[str, Callable[[], Any]], ...]] = ()
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         seen: set[str] = set()
         valid: set[str] = set()
+        factories: list[tuple[str, Callable[[], Any]]] = []
         # Leaf-to-root: the first occurrence of each name wins, so a subclass
         # that shadows an inherited EnvField with a non-EnvField correctly
         # excludes that name from the valid override set.
@@ -445,7 +474,10 @@ class EnvConfig:
                 seen.add(name)
                 if isinstance(attr, EnvField):
                     valid.add(name)
+                    if attr._default_factory is not None:
+                        factories.append((name, attr._default_factory))
         cls._valid_fields = frozenset(valid)
+        cls._factory_fields = tuple(factories)
 
     def __init__(self, **overrides: Any) -> None:
         unknown = overrides.keys() - self._valid_fields
@@ -456,6 +488,11 @@ class EnvConfig:
             )
         self._overrides: dict[str, Any] = dict(overrides)
         self._frozen: dict[str, Any] | None = None
+        self._factory_defaults: dict[str, Any] = {}
+        for name, factory in self._factory_fields:
+            if name in self._overrides:
+                continue
+            self._factory_defaults[name] = factory()
 
     @property
     def is_frozen(self) -> bool:
@@ -476,7 +513,7 @@ class EnvConfig:
             if name in self._overrides:
                 yield name, field, self._overrides[name]
             else:
-                yield name, field, field.value_getter(field.key_name, field.default)
+                yield name, field, field.value_getter(field.key_name, field.resolve_default(self))
 
     def freeze(self) -> None:
         """Resolve every field once and lock the instance to the resulting values.
@@ -557,7 +594,7 @@ class EnvConfig:
                 continue
             try:
                 field: EnvField = getattr(cls, name)
-                field.value_getter(field.key_name, field.default)
+                field.value_getter(field.key_name, field.resolve_default(self))
             except EnvProxyError as exc:
                 errors[name] = exc
         if errors:

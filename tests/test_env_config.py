@@ -1066,3 +1066,296 @@ def test_freeze_propagates_envconfigerror() -> None:
 
     with apply_env(FCE_NO_ANNO="present"), pytest.raises(EnvConfigError):
         Cfg().freeze()
+
+
+def test_default_factory_invoked_at_construction() -> None:
+    calls: list[None] = []
+
+    def _factory() -> str:
+        calls.append(None)
+        return "made"
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFA")
+        name: str = Field(default_factory=_factory)
+
+    Cfg()
+    assert len(calls) == 1
+
+
+def test_default_factory_returned_when_env_missing() -> None:
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFB")
+        tags: list[str] = Field(default_factory=lambda: ["a", "b"])
+
+    config = Cfg()
+    assert config.tags == ["a", "b"]
+
+
+def test_default_factory_env_wins_over_factory_result() -> None:
+    calls: list[None] = []
+
+    def _factory() -> str:
+        calls.append(None)
+        return "from-factory"
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFC")
+        name: str = Field(default_factory=_factory)
+
+    with apply_env(DFC_NAME="from-env"):
+        config = Cfg()
+        assert config.name == "from-env"
+    assert len(calls) == 1
+
+
+def test_default_factory_not_called_again_on_repeated_access() -> None:
+    calls: list[None] = []
+
+    def _factory() -> list[str]:
+        calls.append(None)
+        return []
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFD")
+        tags: list[str] = Field(default_factory=_factory)
+
+    config = Cfg()
+    first = config.tags
+    second = config.tags
+    assert first is second
+    assert len(calls) == 1
+
+
+def test_default_factory_fresh_per_instance() -> None:
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFE")
+        tags: list[str] = Field(default_factory=list)
+
+    a = Cfg()
+    b = Cfg()
+    assert a.tags is not b.tags
+    a.tags.append("x")
+    assert b.tags == []
+
+
+def test_default_factory_skipped_when_overridden() -> None:
+    calls: list[None] = []
+
+    def _factory() -> str:
+        calls.append(None)
+        return "from-factory"
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFF")
+        name: str = Field(default_factory=_factory)
+
+    config = Cfg(name="from-override")
+    assert config.name == "from-override"
+    assert calls == []
+
+
+def test_default_factory_and_default_raises() -> None:
+    from env_proxy import EnvConfigError
+
+    with pytest.raises(EnvConfigError, match=r"either `default` or `default_factory`"):
+        Field(default="x", default_factory=lambda: "y")
+
+
+def test_default_factory_raise_propagates_at_construction() -> None:
+    def _factory() -> str:
+        raise RuntimeError("factory blew up")
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFG")
+        name: str = Field(default_factory=_factory)
+
+    with pytest.raises(RuntimeError, match=r"factory blew up"):
+        Cfg()
+
+
+def test_default_factory_with_convert_using() -> None:
+    converter_calls: list[str] = []
+
+    def _spy(value: str) -> _Level:
+        converter_calls.append(value)
+        return _Level(value)
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFH")
+        level: _Level = Field(convert_using=_spy, default_factory=lambda: _Level.LOW)
+
+    config = Cfg()
+    assert config.level is _Level.LOW
+    assert converter_calls == []
+
+
+def test_default_factory_freeze_uses_cached_value() -> None:
+    calls: list[None] = []
+
+    def _factory() -> list[str]:
+        calls.append(None)
+        return []
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFI")
+        tags: list[str] = Field(default_factory=_factory)
+
+    config = Cfg()
+    constructed = config.tags
+    config.freeze()
+    assert config.tags is constructed
+    assert len(calls) == 1
+
+
+def test_default_factory_validate_uses_cached_value() -> None:
+    calls: list[None] = []
+
+    def _factory() -> list[str]:
+        calls.append(None)
+        return []
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFJ")
+        tags: list[str] = Field(default_factory=_factory)
+
+    config = Cfg()
+    config.validate()
+    assert config.tags is config.tags
+    assert len(calls) == 1
+
+
+def test_default_factory_export_marks_optional() -> None:
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFK")
+        tags: list[str] = Field(default_factory=list)
+
+    buf = StringIO()
+    Cfg.export_env(buf)
+    content = buf.getvalue()
+    assert "[optional]" in content
+    assert "DFK_TAGS=\n" in content or content.rstrip().endswith("DFK_TAGS=")
+
+
+def test_default_factory_export_does_not_invoke_factory() -> None:
+    calls: list[None] = []
+
+    def _factory() -> list[str]:
+        calls.append(None)
+        return []
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFL")
+        tags: list[str] = Field(default_factory=_factory)
+
+    buf = StringIO()
+    Cfg.export_env(buf)
+    assert calls == []
+
+
+def test_default_static_env_set_then_deleted_returns_default() -> None:
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFM")
+        name: str = Field(default="static-default")
+
+    with apply_env(DFM_NAME="from-env"):
+        config = Cfg()
+        assert config.name == "from-env"
+    assert config.name == "static-default"
+
+
+def test_default_factory_env_set_then_deleted_returns_factory_result() -> None:
+    calls: list[None] = []
+
+    def _factory() -> str:
+        calls.append(None)
+        return "from-factory"
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFN")
+        name: str = Field(default_factory=_factory)
+
+    with apply_env(DFN_NAME="from-env"):
+        config = Cfg()
+        assert config.name == "from-env"
+    assert config.name == "from-factory"
+    assert len(calls) == 1
+
+
+def test_default_factory_env_set_then_deleted_after_freeze_returns_env_value() -> None:
+    calls: list[None] = []
+
+    def _factory() -> str:
+        calls.append(None)
+        return "from-factory"
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFO")
+        name: str = Field(default_factory=_factory)
+
+    with apply_env(DFO_NAME="from-env"):
+        config = Cfg()
+        config.freeze()
+    assert config.name == "from-env"
+    assert len(calls) == 1
+
+
+def test_default_factory_returning_none_returns_none() -> None:
+    calls: list[None] = []
+
+    def _factory() -> None:
+        calls.append(None)
+        return None
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="DFP")
+        name: str | None = Field(default_factory=_factory)
+
+    config = Cfg()
+    assert config.name is None
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("declare", "expected"),
+    [
+        ("default", True),
+        ("default_factory", True),
+        ("optional_flag", True),
+        ("annotated_optional", True),
+        ("bare", False),
+    ],
+)
+def test_has_default_paths(declare: str, expected: bool) -> None:
+    if declare == "default":
+
+        class Cfg(EnvConfig):
+            env_proxy = EnvProxy(prefix="HD1")
+            field: str = Field(default="x")
+
+    elif declare == "default_factory":
+
+        class Cfg(EnvConfig):  # type: ignore[no-redef]
+            env_proxy = EnvProxy(prefix="HD2")
+            field: list[str] = Field(default_factory=list)
+
+    elif declare == "optional_flag":
+
+        class Cfg(EnvConfig):  # type: ignore[no-redef]
+            env_proxy = EnvProxy(prefix="HD3")
+            field: int = cast(int, EnvField(optional=True))
+
+    elif declare == "annotated_optional":
+
+        class Cfg(EnvConfig):  # type: ignore[no-redef]
+            env_proxy = EnvProxy(prefix="HD4")
+            field: str | None = Field()
+
+    else:
+
+        class Cfg(EnvConfig):  # type: ignore[no-redef]
+            env_proxy = EnvProxy(prefix="HD5")
+            field: str = Field()
+
+    descriptor: EnvField = cast(EnvField, vars(Cfg)["field"])
+    assert descriptor.has_default is expected
