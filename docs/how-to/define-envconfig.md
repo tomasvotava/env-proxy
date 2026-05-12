@@ -66,6 +66,56 @@ class MyConfig(EnvConfig):
     callback_url: str | None = Field(default=None)
 ```
 
+### Per-instance defaults with `default_factory`
+
+When you want a fresh value for each instance — a mutable container, a
+generated identifier, a timestamp captured at startup — pass a zero-arg
+callable as `default_factory`:
+
+```python
+import uuid
+from datetime import datetime
+
+from env_proxy import EnvConfig, Field
+
+class MyConfig(EnvConfig):
+    env_prefix: str = "MYAPP"
+
+    tags: list[str] = Field(default_factory=list)
+    request_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    started_at: datetime = Field(
+        convert_using=datetime.fromisoformat,
+        default_factory=datetime.now,
+    )
+```
+
+**Always use `default_factory` for mutable defaults.** `Field(default=[])`
+shares one list across every instance of the class; mutating
+`cfg.tags` mutates the next `MyConfig()`'s `tags` too. This is the same
+trap `dataclasses` warns about, and the fix is the same:
+`Field(default_factory=list)`.
+
+The factory runs **once at `MyConfig()` construction time**, mirroring
+`dataclasses.field(default_factory=...)`. The result is stored on the
+instance and used whenever the env var is missing, so `started_at`
+captures the moment the config was built — not the moment you first read
+the attribute. Two separate `MyConfig()` instances each get their own
+factory call.
+
+`default_factory` is mutually exclusive with `default`; passing both
+raises `EnvConfigError` at class-definition time. A constructor override
+(`MyConfig(tags=[...])`) skips the factory entirely.
+
+#### Choosing between `default` and `default_factory`
+
+| Field shape                              | Use                |
+|------------------------------------------|--------------------|
+| Immutable scalar (`int`, `str`, `bool`)  | `default=`         |
+| Explicit `None` fallback                 | `default=None`     |
+| Mutable container (`list`, `dict`, `set`) | `default_factory=` |
+| Per-instance identity (`uuid`, `now`)    | `default_factory=` |
+| Computed from runtime state              | `default_factory=` |
+
 ## Customizing field names
 
 By default the env-var name is derived from the field name (uppercased,
