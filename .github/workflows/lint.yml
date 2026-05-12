@@ -39,3 +39,9 @@ jobs:
         run: ~/.local/bin/poetry run mypy env_proxy tests benchmarks
       - name: pytest
         run: ~/.local/bin/poetry run pytest -vv tests/
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          files: .coverage,coverage.xml,coverage.json
+          fail_ci_if_error: false
+          env_vars: python-version

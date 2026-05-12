@@ -1,5 +1,11 @@
 # env-proxy
 
+[![PyPI version](https://img.shields.io/pypi/v/env-proxy.svg?logo=pypi&logoColor=white)](https://pypi.org/project/env-proxy/)
+[![Python versions](https://img.shields.io/pypi/pyversions/env-proxy.svg?logo=python&logoColor=white)](https://pypi.org/project/env-proxy/)
+[![License](https://img.shields.io/pypi/l/env-proxy.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://img.shields.io/github/actions/workflow/status/tomasvotava/env-proxy/lint.yml?branch=master&label=CI&logo=github)](https://github.com/tomasvotava/env-proxy/actions)
+[![Coverage](https://img.shields.io/codecov/c/github/tomasvotava/env-proxy?logo=codecov&logoColor=white)](https://codecov.io/gh/tomasvotava/env-proxy)
+
 `env-proxy` reads environment variables with type hints, type conversion,
 and a declarative configuration layer. Define your env-driven config once
 as a typed class, then access fields like any other attribute — with
