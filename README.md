@@ -79,6 +79,23 @@ Quick links:
 check`, `mypy`, `pytest`). `make docs-serve` previews the docs at
 http://127.0.0.1:8000.
 
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/);
+the pre-commit `commit-msg` hook enforces this locally.
+
+## Releasing
+
+Releases are driven by [commitizen](https://commitizen-tools.github.io/commitizen/).
+From `master`:
+
+```bash
+poetry run cz bump      # bumps pyproject.toml, appends to CHANGELOG.md, commits, tags
+git push --follow-tags  # pushes the bump commit and the new tag together
+```
+
+Pushing the tag triggers `.github/workflows/release.yml`, which builds the
+distribution, creates a GitHub Release whose body is the matching
+`CHANGELOG.md` section, and publishes to PyPI.
+
 ## License
 
 `env-proxy` is open-source under the MIT License. See
