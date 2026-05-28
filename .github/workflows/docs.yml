@@ -25,9 +25,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.14"
       - name: Install poetry
@@ -38,7 +38,7 @@ jobs:
         run: ~/.local/bin/poetry run mkdocs build --strict
       - name: Upload PR preview artifact
         if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: docs-pr-${{ github.event.pull_request.number }}
           path: site/
@@ -46,9 +46,12 @@ jobs:
           retention-days: 14
       - name: Upload Pages artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site/
+          # v4 began excluding dotfiles by default; opt back in so mkdocs-emitted
+          # files like .nojekyll (which disables Pages' Jekyll processing) are preserved.
+          include-hidden-files: true
 
   deploy:
     needs: build
@@ -60,4 +63,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
