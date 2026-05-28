@@ -15,7 +15,7 @@ Changelog = "https://github.com/tomasvotava/env-proxy/blob/master/CHANGELOG.md"
 pytest = "^9"
 mypy = "<3"
 ruff = "<1"
-pytest-cov = "^6.0.0"
+pytest-cov = ">=6,<8"
 pytest-benchmark = "^5.2.3"
 commitizen = "^4.16.0"
 
