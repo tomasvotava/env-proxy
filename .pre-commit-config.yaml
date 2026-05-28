@@ -12,6 +12,12 @@ repos:
       - id: check-shebang-scripts-are-executable
       - id: detect-private-key
       - id: forbid-submodules
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.16.2
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+        args: [--allow-abort, --commit-msg-file]
   - repo: local
     hooks:
       - id: mypy
