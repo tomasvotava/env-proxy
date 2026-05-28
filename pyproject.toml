@@ -8,12 +8,16 @@ readme = "README.md"
 homepage = "https://github.com/tomasvotava/env-proxy"
 repository = "https://github.com/tomasvotava/env-proxy"
 
+[tool.poetry.urls]
+Changelog = "https://github.com/tomasvotava/env-proxy/blob/master/CHANGELOG.md"
+
 [tool.poetry.group.dev.dependencies]
 pytest = "^9"
 mypy = "<2"
 ruff = "<1"
 pytest-cov = "^6.0.0"
 pytest-benchmark = "^5.2.3"
+commitizen = "^4.16.0"
 
 [tool.poetry.group.docs]
 optional = true
@@ -80,3 +84,12 @@ select = [
 
 [tool.mypy]
 strict = true
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "$version"
+version_scheme = "semver"
+version_provider = "poetry"
+update_changelog_on_bump = true
+major_version_zero = false
+changelog_incremental = true
