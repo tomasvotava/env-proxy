@@ -13,7 +13,7 @@ Changelog = "https://github.com/tomasvotava/env-proxy/blob/master/CHANGELOG.md"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9"
-mypy = "<2"
+mypy = "<3"
 ruff = "<1"
 pytest-cov = "^6.0.0"
 pytest-benchmark = "^5.2.3"
