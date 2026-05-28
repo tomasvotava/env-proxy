@@ -16,6 +16,8 @@ paths that don't exist in the eager-annotation case:
 
 from __future__ import annotations
 
+import json
+from io import StringIO
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 import pytest
@@ -168,6 +170,74 @@ def test_resolved_annotation_on_detached_field_returns_none() -> None:
     # Bypass __set_name__: simulate a stringized annotation on a detached field.
     field._annotation = "int"
     assert field.resolved_annotation is None
+
+
+# -- Export labels for complex / unresolvable annotations under PEP 563 -----
+# These mirror the eager-annotation export-label tests under stringized
+# annotations so the resolution chain in resolved_type_name is held to the
+# same contract regardless of import style.
+
+
+def _payload_from_json(raw: str) -> dict[str, list[str]]:
+    return cast("dict[str, list[str]]", json.loads(raw))
+
+
+class _ComplexConvertPEP563(EnvConfig):
+    env_proxy = EnvProxy(prefix="ECC")
+    payload: dict[str, list[str]] = Field(convert_using=_payload_from_json)
+
+
+def test_export_label_complex_annotation_with_convert_using_under_pep_563() -> None:
+    """Complex annotation + ``convert_using`` exports as the converter name —
+    parity with the eager-annotation path."""
+    buf = StringIO()
+    _ComplexConvertPEP563.export_env(buf, include_defaults=False)
+    assert "# payload (_payload_from_json)" in buf.getvalue()
+
+
+class _ComplexTypeHintPEP563(EnvConfig):
+    env_proxy = EnvProxy(prefix="ECTH")
+    payload: dict[str, list[str]] = Field(type_hint="json")
+
+
+def test_export_label_complex_annotation_with_type_hint_under_pep_563() -> None:
+    """Complex annotation + ``type_hint`` exports as the type_hint name."""
+    buf = StringIO()
+    _ComplexTypeHintPEP563.export_env(buf, include_defaults=False)
+    assert "# payload (json)" in buf.getvalue()
+
+
+class _ComplexTypeNamePEP563(EnvConfig):
+    env_proxy = EnvProxy(prefix="ECTN")
+    payload: dict[str, list[str]] = Field(type_name="ComplexDict")
+
+
+def test_export_label_complex_annotation_with_type_name_under_pep_563() -> None:
+    """Complex annotation + ``type_name`` exports as the explicit type_name."""
+    buf = StringIO()
+    _ComplexTypeNamePEP563.export_env(buf, include_defaults=False)
+    assert "# payload (ComplexDict)" in buf.getvalue()
+
+
+def test_export_label_type_checking_only_annotation_uses_converter_name() -> None:
+    """A ``TYPE_CHECKING``-only annotation can't be resolved at runtime; the
+    export label falls through the resolution chain to the converter's
+    ``__name__``."""
+    buf = StringIO()
+    TypeCheckingOnlyAnnotated.export_env(buf, include_defaults=False)
+    assert "# fancy (_upper)" in buf.getvalue()
+
+
+class _TypeCheckingOnlyWithTypeName(EnvConfig):
+    env_proxy = EnvProxy(prefix="TCN")
+    fancy: FancyType = Field(convert_using=_upper, type_name="Fancy")
+
+
+def test_export_label_type_checking_only_annotation_with_type_name_wins() -> None:
+    """``type_name`` wins immediately, even with an unresolvable annotation."""
+    buf = StringIO()
+    _TypeCheckingOnlyWithTypeName.export_env(buf, include_defaults=False)
+    assert "# fancy (Fancy)" in buf.getvalue()
 
 
 def test_resolved_annotation_owner_without_string_module_returns_none() -> None:
