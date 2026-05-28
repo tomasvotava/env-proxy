@@ -1359,3 +1359,72 @@ def test_has_default_paths(declare: str, expected: bool) -> None:
 
     descriptor: EnvField = cast(EnvField, vars(Cfg)["field"])
     assert descriptor.has_default is expected
+
+
+# -- Export labels for complex annotations -----------------------------------
+# These guard the resolved_type_name resolution chain against regressions on
+# the paths where the annotation is "too complicated" to simplify and either
+# convert_using/type_hint/type_name is doing the labelling work. The eager
+# annotation form is exercised here; PEP-563 mirrors live in
+# tests/test_annotation_inference_future.py.
+
+
+class _ComplexWithTypeName(EnvConfig):
+    env_proxy = EnvProxy(prefix="CTN")
+    payload: dict[str, list[str]] = Field(type_name="ComplexDict")
+
+
+def test_export_label_complex_annotation_with_type_name_wins() -> None:
+    """type_name beats the (too-complicated) annotation in the export label."""
+    buf = StringIO()
+    _ComplexWithTypeName.export_env(buf, include_defaults=False)
+    assert "# payload (ComplexDict)" in buf.getvalue()
+
+
+class _ComplexWithoutOverrides(EnvConfig):
+    env_proxy = EnvProxy(prefix="CNO")
+    payload: dict[str, list[str]] = Field(strict=False)
+
+
+def test_export_label_complex_annotation_without_overrides_is_unknown_type() -> None:
+    """A genuinely complex annotation with no type_name/convert_using/type_hint
+    exports as 'unknown type' — same fallthrough as a missing annotation, but
+    triggered by the annotation being unsimplifiable rather than absent."""
+    buf = StringIO()
+    _ComplexWithoutOverrides.export_env(buf, include_defaults=False)
+    assert "# payload (unknown type)" in buf.getvalue()
+
+
+# -- optional= flag on EnvField, no `| None` in annotation -------------------
+
+
+def test_optional_flag_returns_none_when_env_missing() -> None:
+    """``EnvField(optional=True)`` serves ``None`` for a missing env value even
+    when the annotation is not ``X | None``."""
+
+    class Cfg(EnvConfig):
+        env_proxy = EnvProxy(prefix="OPTFL")
+        v: int = cast(int, EnvField(optional=True))
+
+    assert Cfg().v is None
+
+
+# -- Subclass shadowing an inherited Field with another Field ---------------
+
+
+def test_subclass_can_replace_inherited_field_with_new_field() -> None:
+    """A subclass that redeclares an inherited field with a new ``Field()`` and
+    a new annotation takes over: its declaration wins for type, default, and
+    every other knob."""
+
+    class Base(EnvConfig):
+        env_proxy = EnvProxy(prefix="SHDW")
+        x: int = Field(default=1)
+
+    class Sub(Base):
+        x: str = Field(default="overridden")  # type: ignore[assignment]  # deliberate type-narrowing override
+
+    assert Sub().x == "overridden"
+    assert isinstance(Sub().x, str)
+    # And the parent's typed default is unreachable through Sub.
+    assert Base().x == 1
