@@ -199,16 +199,56 @@ class EnvField:
         return self.default
 
     @cached_property
+    def resolved_annotation(self) -> Any:
+        """The annotation as a runtime object.
+
+        Annotations declared in a module that uses ``from __future__ import
+        annotations`` (PEP 563) arrive here as plain strings. Resolve them
+        lazily, per field, against the owner's module globals plus its class
+        locals — mirroring what :func:`inspect.get_annotations` does with
+        ``eval_str=True`` but scoped to one field so an unresolvable
+        annotation on a sibling field can't crash the whole class.
+
+        Eager (non-PEP-563) annotations short-circuit unchanged. An eval
+        failure (e.g. a ``TYPE_CHECKING``-only name used on a field that
+        relies on ``convert_using=``/``type_hint=``) degrades to ``None``,
+        which routes into the existing "too complicated" handling — strict
+        mode still errors for that specific field, the rest of the class
+        works.
+        """
+        annotation = self._annotation
+        if not isinstance(annotation, str):
+            return annotation
+        owner = self._owner
+        if owner is None:
+            return None
+        module_name = getattr(owner, "__module__", None)
+        if not isinstance(module_name, str):
+            return None
+        module = sys.modules.get(module_name)
+        globalns: dict[str, Any] = getattr(module, "__dict__", {})
+        localns = dict(vars(owner))
+        try:
+            return eval(annotation, globalns, localns)  # noqa: S307 - resolve a PEP 563 string annotation in its owner's own namespace
+        except Exception as exc:
+            # eval of a user-authored annotation can surface anything its
+            # __class_getitem__ raises; degrade uniformly. Nothing else in the
+            # try-block is ours, so a broad catch can't mask an env-proxy bug.
+            logger.debug("Could not resolve annotation %r for field %r: %s", annotation, self._field_name, exc)
+            return None
+
+    @cached_property
     def annotated_optional(self) -> bool:
-        if self._annotation is None:
+        annotation = self.resolved_annotation
+        if annotation is None:
             return False
-        if get_origin(self._annotation) is None:
+        if get_origin(annotation) is None:
             return False
-        return NoneType in get_args(self._annotation)
+        return NoneType in get_args(annotation)
 
     @cached_property
     def simplified_annotation(self) -> Any:
-        return _get_simplified_annotation(self._annotation)
+        return _get_simplified_annotation(self.resolved_annotation)
 
     @cached_property
     def resolved_type_name(self) -> str:
