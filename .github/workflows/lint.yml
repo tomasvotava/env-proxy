@@ -40,7 +40,7 @@ jobs:
       - name: pytest
         run: ~/.local/bin/poetry run pytest -vv tests/
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: .coverage,coverage.xml,coverage.json
           fail_ci_if_error: false
