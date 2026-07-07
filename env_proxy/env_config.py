@@ -338,16 +338,13 @@ class EnvField:
     @cached_property
     def env_proxy(self) -> EnvProxy:
         if self._env_proxy is not None:
-            logger.debug("Using provided EnvProxy instance.")
             return self._env_proxy
         if self._env_prefix is not None:
-            logger.debug("Creating EnvProxy instance using provided env_prefix %r.", self._env_prefix)
             self._env_proxy = EnvProxy(prefix=self._env_prefix)
             return self._env_proxy
         if (inherited_value := getattr(self.owner, "env_proxy", None)) is not None and isinstance(
             inherited_value, EnvProxy
         ):
-            logger.debug("Using EnvProxy instance found on owner EnvConfig.")
             self._env_proxy = inherited_value
             return self._env_proxy
         logger.debug(
@@ -374,7 +371,6 @@ class EnvField:
         if overrides is not None and self.field_name in overrides:
             overrides[self.field_name] = value
         key = self.env_proxy._get_key(self.key_name)
-        logger.debug("Setting %r in os.environ.", key)
         if value is None:
             if key in os.environ:
                 del os.environ[key]
