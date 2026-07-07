@@ -90,18 +90,14 @@ class EnvProxy:
     def _get_raw(self, key: str) -> str | None:
         """Get raw value from the environment."""
         key = self._get_key(key)
-        logger.debug("Attempting to read %r from env.", key)
         value = os.getenv(key, None)
         if not value:
             value = None
-        if value is None:
-            logger.debug("No value for key %r in env.", key)
         return value
 
     def _resolve_default(self, key: str, default: T | Sentinel = UNSET) -> T:
         if isinstance(default, Sentinel):
             raise EnvKeyMissingError(key)
-        logger.debug("Using default value for key %r.", key)
         return default
 
     @overload
